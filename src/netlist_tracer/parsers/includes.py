@@ -8,13 +8,14 @@ from typing import Optional, Union
 
 from netlist_tracer._logging import get_logger
 from netlist_tracer.exceptions import IncludePathNotFoundError, NetlistParseError
+from netlist_tracer.parsers.detect import detect_format
 
 _logger = get_logger(__name__)
 
 
 def expand_includes(
     top_file: str, dialect: str, include_paths: Optional[list[str]] = None
-) -> tuple[list[tuple[str, str, int]], list[str]]:
+) -> tuple[list[tuple[str, str, int]], list[str], list[str]]:
     """Recursively expand include statements and return flattened line stream.
 
     Args:
@@ -23,11 +24,14 @@ def expand_includes(
         include_paths: Optional list of additional search directories.
 
     Returns:
-        Tuple of (expanded_lines, ahdl_include_paths) where:
+        Tuple of (expanded_lines, ahdl_include_paths, spf_include_paths) where:
         - expanded_lines: List of (line_text, source_file_path, source_line_no) tuples
           with provenance preserved for error reporting.
         - ahdl_include_paths: List of resolved absolute paths to .va files referenced
           via ahdl_include directives (empty list for SPICE dialect).
+        - spf_include_paths: List of resolved absolute paths to SPF files referenced
+          via dspf_include directives OR plain include directives with SPF-hint
+          extensions (.spf, .spf.gz, .dspf, .dspf.gz, case-insensitive).
 
     Raises:
         NetlistParseError: On cycle detection or unresolvable path.
@@ -37,6 +41,7 @@ def expand_includes(
 
     expanded_lines: list[tuple[str, str, int]] = []
     ahdl_include_paths: list[str] = []
+    spf_include_paths: list[str] = []
     # Stack entries are (abs_path, section_filter) tuples. section_filter is either None
     # (whole-file include) or (kind, section_name) tuple. Cycle detection compares the
     # full tuple, so same file with different sections is NOT a cycle.
@@ -117,6 +122,10 @@ def expand_includes(
         i = 0
         while i < len(lines):
             line = lines[i]
+            # Join backslash-continued lines before processing
+            while i + 1 < len(lines) and line.rstrip().endswith("\\"):
+                line = line.rstrip()[:-1] + " " + lines[i + 1].lstrip()
+                i += 1
             stripped = line.strip()
 
             # Section marker scanning (when section_filter is active)
@@ -128,10 +137,10 @@ def expand_includes(
                     # Match .endl [SECTION_NAME] (closer)
                     closer = re.match(r"^\.endl\b(?:\s+(\S+))?\s*$", stripped, re.IGNORECASE)
                 else:  # spectre
-                    # Match library NAME (opener, case-sensitive)
-                    opener = re.match(r"^library\s+(\S+)\s*$", stripped)
-                    # Match endlibrary [NAME] (closer, case-sensitive)
-                    closer = re.match(r"^endlibrary\b(?:\s+(\S+))?\s*$", stripped)
+                    # Match library NAME or section NAME (opener, case-sensitive)
+                    opener = re.match(r"^(?:library|section)\s+(\S+)\s*$", stripped)
+                    # Match endlibrary [NAME] or endsection [NAME] (closer, case-sensitive)
+                    closer = re.match(r"^(?:endlibrary|endsection)\b(?:\s+(\S+))?\s*$", stripped)
 
                 if opener:
                     opener_name = opener.group(1)
@@ -184,8 +193,23 @@ def expand_includes(
                     try:
                         resolved_ahdl = _resolve_include_path(ahdl_path, abs_path, include_paths)
                         ahdl_include_paths.append(resolved_ahdl)
+                        _logger.info(f"Include: {resolved_ahdl} (type=veriloga, section=-)")
                     except IncludePathNotFoundError:
                         _logger.warning(f"Skipping ahdl_include '{ahdl_path}' — path unresolvable")
+                    line_no += 1
+                    i += 1
+                    continue
+
+            # Parse dspf_include directive (Spectre-only, always SPF parser)
+            if dialect == "spectre" and current_lang == "spectre":
+                dspf_path = _parse_spectre_dspf_include_directive(stripped)
+                if dspf_path:
+                    try:
+                        resolved_spf = _resolve_include_path(dspf_path, abs_path, include_paths)
+                        spf_include_paths.append(resolved_spf)
+                        _logger.info(f"Include: {resolved_spf} (type=spf, section=-)")
+                    except IncludePathNotFoundError:
+                        _logger.warning(f"Skipping dspf_include '{dspf_path}' — path unresolvable")
                     line_no += 1
                     i += 1
                     continue
@@ -241,11 +265,10 @@ def expand_includes(
                         line_no += 1
                         i += 1
                         continue
-                    _logger.info(
-                        f"Inlining {directive_label} '{raw_path}' section '{section}' "
-                        f"-> {resolved_path}"
-                    )
                     section_kind = "spice" if directive_label == ".lib" else "spectre"
+                    _logger.info(
+                        f"Include: {resolved_path} (type={section_kind}, section={section})"
+                    )
                     found = _expand_recursive(
                         resolved_path,
                         include_stack,
@@ -275,17 +298,28 @@ def expand_includes(
                         line_no += 1
                         i += 1
                         continue
-                    _logger.info(f"Including: {resolved_path}")
+                    _logger.info(f"Include: {resolved_path} (type=spectre, section=-)")
                     _expand_recursive(resolved_path, include_stack, current_lang)
                 else:
-                    # .include/.inc (and Spectre bare include): strict raise on unresolvable
+                    # .include/.inc (and Spectre bare include): detect format via content
                     try:
                         resolved_path = _resolve_include_path(raw_path, abs_path, include_paths)
                     except NetlistParseError:
                         raise
 
-                    _logger.info(f"Including: {resolved_path}")
-                    _expand_recursive(resolved_path, include_stack, current_lang)
+                    # AC33: Use content-based detect_format instead of extension hint
+                    detected_fmt = detect_format([resolved_path])
+                    if detected_fmt == "spf":
+                        spf_include_paths.append(resolved_path)
+                        _logger.info(f"Include: {resolved_path} (type=spf, section=-)")
+                    elif detected_fmt in ("spectre", "spice", "cdl", "edif", "verilog"):
+                        # Route to inline expansion (Spectre/SPICE/CDL/EDIF/Verilog)
+                        _logger.info(f"Include: {resolved_path} (type={detected_fmt}, section=-)")
+                        _expand_recursive(resolved_path, include_stack, current_lang)
+                    else:
+                        # Fallback to spectre if detection is ambiguous
+                        _logger.info(f"Include: {resolved_path} (type=spectre, section=-)")
+                        _expand_recursive(resolved_path, include_stack, current_lang)
             else:
                 # Regular line — add to output with provenance
                 expanded_lines.append((line.rstrip("\n\r"), abs_path, line_no))
@@ -297,7 +331,7 @@ def expand_includes(
         return section_found
 
     _expand_recursive(top_file, include_stack, current_lang=dialect)
-    return expanded_lines, ahdl_include_paths
+    return expanded_lines, ahdl_include_paths, spf_include_paths
 
 
 def _resolve_include_path(raw_path: str, including_file: str, include_paths: list[str]) -> str:
@@ -447,3 +481,26 @@ def _parse_spectre_ahdl_include_directive(line: str) -> Optional[str]:
     if match:
         return match.group(1)
     return None
+
+
+def _parse_spectre_dspf_include_directive(line: str) -> Optional[str]:
+    """Match Spectre dspf_include directive. Return the quoted path or None.
+
+    Spectre directive: dspf_include "path" [bus_delim="..." ...] (quoted form only).
+    The path is dispatched to the SPF parser regardless of file extension.
+    Trailing arguments like bus_delim="..." are ignored.
+
+    Args:
+        line: Stripped line text (case-sensitive).
+
+    Returns:
+        The quoted path string on match, or None if the line is not
+        a dspf_include directive.
+    """
+    # dspf_include "path" [optional trailing args like bus_delim="..."]
+    match = re.match(r'^dspf_include\s+"([^"]+)"', line)
+    if match:
+        return match.group(1)
+    return None
+
+

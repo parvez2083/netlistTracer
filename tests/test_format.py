@@ -307,6 +307,7 @@ endmodule
             main_fpath.write_bytes(main_content)
 
             # Expand includes should succeed
-            expanded, ahdl_paths = expand_includes(str(main_fpath), "spice")
+            expanded, ahdl_paths, spf_paths = expand_includes(str(main_fpath), "spice")
             assert len(expanded) > 0
             assert ahdl_paths == []
+            assert spf_paths == []

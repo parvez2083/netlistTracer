@@ -1,0 +1,4 @@
+*SPEF "1.0" "ns" "1pF" "1ohm"
+*D_NET clk 0.1
+*CAP 1 0.05pF
+*END

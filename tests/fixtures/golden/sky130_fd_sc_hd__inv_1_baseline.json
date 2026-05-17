@@ -2,15 +2,37 @@
   "fixture": "sky130_fd_sc_hd__inv_1.spice",
   "parser": {
     "format": "spice",
-    "subckt_count": 1,
+    "subckt_count": 3,
+    "total_instance_count": 2,
     "subckt_names_sorted": [
+      "sky130_fd_pr__nfet_01v8",
+      "sky130_fd_pr__pfet_01v8_hvt",
       "sky130_fd_sc_hd__inv_1"
     ],
     "subckts": {
-      "sky130_fd_sc_hd__inv_1": {
+      "sky130_fd_pr__nfet_01v8": {
+        "pins": [
+          "D",
+          "G",
+          "S",
+          "B"
+        ],
+        "pin_count": 4,
         "alias_count": 0,
-        "child_instance_count": 2,
-        "pin_count": 6,
+        "child_instance_count": 0
+      },
+      "sky130_fd_pr__pfet_01v8_hvt": {
+        "pins": [
+          "D",
+          "G",
+          "S",
+          "B"
+        ],
+        "pin_count": 4,
+        "alias_count": 0,
+        "child_instance_count": 0
+      },
+      "sky130_fd_sc_hd__inv_1": {
         "pins": [
           "A",
           "VGND",
@@ -18,22 +40,24 @@
           "VPB",
           "VPWR",
           "Y"
-        ]
+        ],
+        "pin_count": 6,
+        "alias_count": 0,
+        "child_instance_count": 2
       }
-    },
-    "total_instance_count": 2
+    }
   },
   "source_url": "https://raw.githubusercontent.com/google/skywater-pdk-libs-sky130_fd_sc_hd/main/cells/inv/sky130_fd_sc_hd__inv_1.spice",
   "trace": {
-    "max_depth": null,
-    "paths": [
-      "sky130_fd_sc_hd__inv_1|<internal>|A -- sky130_fd_pr__nfet_01v8|X0|sky130_fd_pr__nfet_01v8:1",
-      "sky130_fd_sc_hd__inv_1|<internal>|A -- sky130_fd_pr__pfet_01v8_hvt|X1|sky130_fd_pr__pfet_01v8_hvt:1"
-    ],
-    "raw_path_count": 2,
     "start_cell": "sky130_fd_sc_hd__inv_1",
     "start_pin": "A",
-    "unique_path_count": 2
+    "max_depth": null,
+    "raw_path_count": 2,
+    "unique_path_count": 2,
+    "paths": [
+      "sky130_fd_sc_hd__inv_1|<internal>|A -- sky130_fd_pr__nfet_01v8|X0|G",
+      "sky130_fd_sc_hd__inv_1|<internal>|A -- sky130_fd_pr__pfet_01v8_hvt|X1|G"
+    ]
   },
   "vendored_sha": "ac7fb61f06e6470b94e8afdf7c25268f62fbd7b1"
 }

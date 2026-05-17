@@ -340,8 +340,8 @@ def parse_spice(
         maps cell names to SubcktDef objects, instances_list is a list of Instance
         objects, and global_nets is a list of net names from .global directives.
     """
-    # Expand includes first
-    expanded_lines, _ = expand_includes(filename, "spice", include_paths)
+    # Expand includes first (note: spice.py doesn't use ahdl or spf sidechannels)
+    expanded_lines, _, _ = expand_includes(filename, "spice", include_paths)
     lines = [line_text + "\n" for line_text, _, _ in expanded_lines]
 
     # Pre-pass: merge continuation lines

@@ -13,6 +13,7 @@ from netlist_tracer.model import Instance, SubcktDef, merge_aliases_into_subckt
 from netlist_tracer.parsers.detect import detect_format, detect_format_per_file
 from netlist_tracer.parsers.edif import parse_edif
 from netlist_tracer.parsers.peek import peek_pins as _pk_pns
+from netlist_tracer.parsers.primitives import synthesize_primitive_subckts
 from netlist_tracer.parsers.spectre import parse_spectre
 from netlist_tracer.parsers.spf import parse_spf
 from netlist_tracer.parsers.spice import parse_spice
@@ -186,6 +187,8 @@ class NetlistParser:
             else:
                 self.format = self._detect_format()
         self._parse()
+        # Synthesize virtual SubcktDefs for SPICE primitives (post-parse pass)
+        synthesize_primitive_subckts(self)
 
     def _detect_format(self) -> str:
         """Detect netlist format from file content."""
@@ -317,15 +320,19 @@ class NetlistParser:
     ) -> None:
         """Merge per-format parser outputs into self, applying format-priority collision policy.
 
-        Iterates formats in descending _FORMAT_PRIORITY rank order. For each
-        subckt name, first format to define it wins; subsequent definitions
-        logged as WARNING and dropped. Instances always merged. global_nets
-        concatenated and deduplicated.
+        For each subckt name collision, applies non-empty-wins logic:
+        - If one definition is empty (has no instance children) and the other is non-empty,
+          the non-empty one wins (back-annotation of empty Spectre shells)
+        - If both empty or both non-empty, existing _FORMAT_PRIORITY rank applies
+
+        Iterates formats in descending _FORMAT_PRIORITY rank order. Instances always merged.
+        global_nets concatenated and deduplicated.
 
         Args:
             per_fmt_rslt: Dict mapping format to (subckts, instances, global_nets) tuple
         """
         mrgd_sbckts: dict[str, SubcktDef] = {}
+        mrgd_subckt_fmt: dict[str, str] = {}  # name -> format for logging
         all_insts: list[Instance] = []
         all_gbl_nets: list[str] = []
 
@@ -334,27 +341,55 @@ class NetlistParser:
             per_fmt_rslt.keys(), key=lambda f: _FORMAT_PRIORITY.get(f, -1), reverse=True
         )
 
+        # Build instance count per subckt per format (pre-merge)
+        inst_cnt_by_subckt: dict[tuple[str, str], int] = {}
+        for fmt in sorted_fmts:
+            _, insts, _ = per_fmt_rslt[fmt]
+            for inst in insts:
+                key = (fmt, inst.parent_cell)
+                inst_cnt_by_subckt[key] = inst_cnt_by_subckt.get(key, 0) + 1
+
         for fmt in sorted_fmts:
             sbckts, insts, gbl_nets = per_fmt_rslt[fmt]
 
-            # Merge subckts with collision detection
+            # Merge subckts with collision detection and non-empty-wins logic
             for name, sub in sbckts.items():
                 if name in mrgd_sbckts:
-                    # Collision: first (highest priority) wins; log warning
-                    winner_fmt = None
-                    for check_fmt in sorted_fmts:
-                        if check_fmt == fmt:
-                            break
-                        if name in per_fmt_rslt[check_fmt][0]:
-                            winner_fmt = check_fmt
-                            break
-                    if winner_fmt:
-                        _logger.warning(
-                            f"Subckt '{name}' defined in both {winner_fmt} and {fmt}; "
-                            f"keeping {winner_fmt} definition (priority {_FORMAT_PRIORITY.get(winner_fmt, -1)} > {_FORMAT_PRIORITY.get(fmt, -1)})"
+                    # Collision: apply non-empty-wins logic
+                    ex_fmt = mrgd_subckt_fmt[name]
+                    ex_inst_cnt = inst_cnt_by_subckt.get((ex_fmt, name), 0)
+                    new_inst_cnt = inst_cnt_by_subckt.get((fmt, name), 0)
+                    existing_empty = ex_inst_cnt == 0
+                    new_empty = new_inst_cnt == 0
+
+                    if existing_empty and not new_empty:
+                        # New definition is non-empty, existing is empty: replace (back-annotation)
+                        _logger.info(
+                            f"Back-annotating '{name}': empty from {ex_fmt} "
+                            f"-> populated from {fmt} ({new_inst_cnt} instance(s))"
                         )
+                        mrgd_sbckts[name] = sub
+                        mrgd_subckt_fmt[name] = fmt
+                    elif not existing_empty and new_empty:
+                        # New definition is empty, existing is non-empty: keep existing
+                        pass
+                    else:
+                        # Both empty or both non-empty: format-priority wins
+                        winner_fmt = None
+                        for check_fmt in sorted_fmts:
+                            if check_fmt == fmt:
+                                break
+                            if name in per_fmt_rslt[check_fmt][0]:
+                                winner_fmt = check_fmt
+                                break
+                        if winner_fmt:
+                            _logger.warning(
+                                f"Subckt '{name}' defined in both {winner_fmt} and {fmt}; "
+                                f"keeping {winner_fmt} definition (priority {_FORMAT_PRIORITY.get(winner_fmt, -1)} > {_FORMAT_PRIORITY.get(fmt, -1)})"
+                            )
                 else:
                     mrgd_sbckts[name] = sub
+                    mrgd_subckt_fmt[name] = fmt
 
             # Always merge instances
             all_insts.extend(insts)

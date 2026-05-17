@@ -216,3 +216,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Date-stamped backup files (scratch saves from editors/agents)
+*.py_[0-9]*

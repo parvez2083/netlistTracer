@@ -1,0 +1,4 @@
+.SUBCKT top_cell d_net g_net s_net b_net
+* Simple circuit with a MOSFET primitive (no explicit subckt definition)
+M1 d_net g_net s_net b_net nmos_model W=1u L=0.1u
+.ENDS top_cell

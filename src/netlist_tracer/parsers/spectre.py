@@ -26,8 +26,24 @@ def parse_spectre(
         Tuple of (subckts_dict, instances_list) where subckts_dict maps cell
         names to SubcktDef objects and instances_list is a list of Instance objects.
     """
-    # Expand includes first
-    expanded_lines, ahdl_include_paths = expand_includes(filename, "spectre", include_paths)
+    # Expand includes and collect SPF/ahdl paths via unified resolver (AC31)
+    expanded_lines, ahdl_include_paths, spf_include_paths = expand_includes(
+        filename, "spectre", include_paths
+    )
+
+    # Parse SPF files collected by the unified resolver
+    from netlist_tracer.parsers.spf import parse_spf
+
+    spf_subckts: dict[str, SubcktDef] = {}
+    spf_insts: list[Instance] = []
+    for spf_path in spf_include_paths:
+        try:
+            spf_sbckts, spf_inst_list, _ = parse_spf(spf_path, include_paths=include_paths)
+            spf_subckts.update(spf_sbckts)
+            spf_insts.extend(spf_inst_list)
+            _logger.info(f"Parsed SPF: {spf_path}")
+        except Exception as e:
+            _logger.warning(f"Failed to parse SPF '{spf_path}': {type(e).__name__}: {e}")
     raw_lines = [line_text + "\n" for line_text, _, _ in expanded_lines]
 
     subckts: dict[str, SubcktDef] = {}
@@ -126,6 +142,21 @@ def parse_spectre(
             instance = _parse_spectre_instance(stripped, cell_name, subckts)
             if instance:
                 instances.append(instance)
+
+    # Merge SPF-included content: non-empty-wins (SPF can back-annotate empty shells)
+    for spf_name, spf_sub in spf_subckts.items():
+        if spf_name not in subckts:
+            # New subckt from SPF
+            subckts[spf_name] = spf_sub
+        else:
+            # Collision: check if Spectre version is empty and SPF is not
+            spec_has_insts = any(i.parent_cell == spf_name for i in instances)
+            spf_has_insts = any(i.parent_cell == spf_name for i in spf_insts)
+            if not spec_has_insts and spf_has_insts:
+                # SPF has content, Spectre is empty: back-annotate
+                _logger.info(f"Back-annotating '{spf_name}': empty Spectre shell -> populated SPF body")
+                subckts[spf_name] = spf_sub
+    instances.extend(spf_insts)
 
     return subckts, instances
 

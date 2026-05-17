@@ -195,3 +195,21 @@ def synthetic_verilog_a_leaf_va(fixtures_synthetic_dir):
 def synthetic_verilog_a_parent_v(fixtures_synthetic_dir):
     """Path to synthetic verilog_a_parent.v fixture (parent instantiating Verilog-A)."""
     return os.path.join(fixtures_synthetic_dir, "verilog_a_parent.v")
+
+
+@pytest.fixture
+def synthetic_primitive_mosfet_spf(fixtures_synthetic_dir):
+    """Path to synthetic primitive_mosfet.spf fixture (SPF with MOSFET primitive)."""
+    return os.path.join(fixtures_synthetic_dir, "primitive_mosfet.spf")
+
+
+@pytest.fixture
+def synthetic_simple_inv_spef(fixtures_synthetic_dir):
+    """Path to synthetic simple_inv.spef fixture (basic SPEF for testing)."""
+    return os.path.join(fixtures_synthetic_dir, "simple_inv.spef")
+
+
+@pytest.fixture
+def synthetic_simple_inv_spef_gz(fixtures_synthetic_dir):
+    """Path to synthetic simple_inv.spef.gz fixture (gzipped SPEF for testing)."""
+    return os.path.join(fixtures_synthetic_dir, "simple_inv.spef.gz")

@@ -19,6 +19,47 @@ _LATERAL_SKIP_TYPES = frozenset({"C", "K"})
 Treated as parasitic noise irrelevant for connectivity tracing."""
 
 
+def _is_primitive_shell(parser: NetlistParser, subckt: Any) -> bool:
+    """Check if a subckt is a synthesized primitive shell with no body.
+
+    A subckt is a synthesized primitive shell if:
+    - It has no aliases (internal net mappings)
+    - It has no instances (no body)
+    - Its pins match the synthesized-primitive naming convention (short single
+      uppercase letters/numbers like D, G, S, B, A, K, or numeric 1, 2, ...)
+
+    This distinguishes synthesized SPICE primitives (e.g., MOSFET model
+    cell_types with D/G/S/B pin shells) from normal Verilog leaf modules
+    (which have arbitrary port names like clk, resetn, data[31:0]). The
+    tracer treats primitive shells as leaf
+    primitives for traversal — pin labels are still used for endpoint
+    emission and pin validation, but descent/walk-up logic is bypassed so
+    we fall through to lateral-walk endpoint emission.
+
+    Inputs:
+        parser: NetlistParser (for accessing instances_by_parent)
+        subckt: SubcktDef instance
+
+    Outputs:
+        bool — True if the subckt matches synthesized-primitive characteristics
+    """
+    if subckt.aliases or parser.instances_by_parent.get(subckt.name, []):
+        return False
+
+    # Check pin names: synthesized primitives have short single-letter or
+    # numeric pins. Real Verilog modules have longer names with buses, e.g.
+    # 'clk', 'resetn', 'data[31:0]', 'waddr[5:0]'.
+    for pin in subckt.pins:
+        # Strip bus brackets if present
+        base_pin = re.sub(r"\[\d+(?::\d+)?\]$", "", pin)
+        # Synthesized pins are 1-2 chars of uppercase letters/digits
+        # Real Verilog port names are longer or contain lowercase
+        if not (1 <= len(base_pin) <= 2 and base_pin.isupper() and base_pin.replace("_", "").isalnum()):
+            return False
+
+    return True
+
+
 def _spf_pin_from_net(net: str) -> str | None:
     """Extract pin name from SPF instance-terminal form '<instance>:<pin>'.
 
@@ -335,182 +376,17 @@ class BidirectionalTracer:
         all_paths = []
 
         for start_cell, initial_stack in seeds:
-            subckt = self.parser.subckts.get(start_cell)
-            initial_step = TraceStep(
-                cell=start_cell,
-                pin_or_net=start_pin,
-                direction="start",
-                instance_name=initial_stack[-1][0] if initial_stack else None,
-                inst_stack=initial_stack,
+            # Use the shared BFS helper with the initial stack context
+            current_inst_name: Optional[str] = initial_stack[-1][0] if initial_stack else None
+            paths = self._bfs_from_seed(
+                start_cell,
+                start_pin,
+                target_name=target_name,
+                max_depth=max_depth,
+                initial_stack=initial_stack,
+                initial_inst_name=current_inst_name,
             )
-
-            queue = deque([(start_cell, start_pin, initial_stack, [initial_step])])
-            visited = set()
-
-            while queue:
-                curr_cell, curr_net, inst_stack, path = queue.popleft()
-
-                state_key = (curr_cell, curr_net, inst_stack)
-                if state_key in visited:
-                    continue
-                visited.add(state_key)
-
-                if curr_net == "":
-                    continue
-
-                if re.match(r"^\d+'[bdohBDOH][0-9a-fA-FxXzZ_?]+$", curr_net):
-                    if len(path) > 1:
-                        all_paths.append(path)
-                    continue
-
-                if re.match(r"^(VDD|VSS)", curr_net) and len(path) > 1:
-                    all_paths.append(path)
-                    continue
-
-                if max_depth is not None and len(path) > max_depth:
-                    all_paths.append(path)
-                    continue
-
-                if target_name:
-                    curr_ctx = inst_stack[-1] if inst_stack else None
-                    if (curr_cell, curr_ctx) in target_set or (curr_cell, None) in target_set:
-                        all_paths.append(path)
-                        continue
-
-                queue_len_before = len(queue)
-                all_paths_len_before = len(all_paths)
-                path_cells = {(s.cell, s.pin_or_net) for s in path}
-
-                for equiv_net in self._equivalence_class(curr_cell, curr_net):
-                    if equiv_net == curr_net:
-                        continue
-                    if (curr_cell, equiv_net) in path_cells:
-                        continue
-                    alias_step = TraceStep(
-                        cell=curr_cell,
-                        pin_or_net=equiv_net,
-                        direction="alias",
-                        instance_name=None,
-                        inst_stack=inst_stack,
-                    )
-                    queue.append((curr_cell, equiv_net, inst_stack, path + [alias_step]))
-
-                for inst in self.parser.instances_by_parent.get(curr_cell, []):
-                    if curr_net not in inst.nets:
-                        continue
-                    net_pos = inst.nets.index(curr_net)
-                    child_subckt = self.parser.subckts.get(inst.cell_type)
-
-                    # Hierarchical descent: if child_subckt exists and pin index is valid
-                    if child_subckt and net_pos < len(child_subckt.pins):
-                        child_pin = child_subckt.pins[net_pos]
-                        if (inst.cell_type, child_pin) not in path_cells:
-                            new_stack_down = inst_stack + ((inst.name, curr_cell),)
-                            new_step = TraceStep(
-                                cell=inst.cell_type,
-                                pin_or_net=child_pin,
-                                direction="down",
-                                instance_name=inst.name,
-                                inst_stack=new_stack_down,
-                            )
-                            queue.append(
-                                (inst.cell_type, child_pin, new_stack_down, path + [new_step])
-                            )
-
-                    # Lateral walk: leaf primitive (no SubcktDef)
-                    # Only R and L allow galvanic thru-walk; others are endpoints
-                    elif not child_subckt:
-                        # SPF convention: an instance terminal connection appears as
-                        # '<instance>:<pin>' (e.g. 'inst/M1:G'). When present,
-                        # extract the trailing pin name (D/G/S/B for MOSFETs, ...)
-                        # so the trace shows real pin names instead of cell:position.
-                        curr_pin_name = _spf_pin_from_net(curr_net)
-                        if inst.cell_type.upper() in _LATERAL_WALK_THRU_TYPES:
-                            # Galvanic thru-walk: emit "thru" and continue tracing.
-                            # Label prefers the device value (e.g. <1.5ohm> for R,
-                            # <2nH> for L) so the user sees physical magnitude;
-                            # falls back to the SPF entry-pin name or
-                            # cell_type:position when value is unavailable.
-                            value = inst.params.get("_value") if hasattr(inst, "params") else None
-                            if value:
-                                unit = "ohm" if inst.cell_type.upper() == "R" else "H"
-                                thru_label = f"<{value}{unit}>"
-                            else:
-                                thru_label = curr_pin_name or f"{inst.cell_type}:{net_pos}"
-                            for alt_pos, alt_net in enumerate(inst.nets):
-                                if alt_pos == net_pos:
-                                    continue  # Skip the current position
-                                if (curr_cell, alt_net) in path_cells:
-                                    continue  # Skip if already visited
-
-                                thru_step = TraceStep(
-                                    cell=inst.cell_type,
-                                    pin_or_net=thru_label,
-                                    direction="thru",
-                                    instance_name=inst.name,
-                                    inst_stack=inst_stack,
-                                )
-                                queue.append((curr_cell, alt_net, inst_stack, path + [thru_step]))
-                        elif inst.cell_type.upper() in _LATERAL_SKIP_TYPES:
-                            # Caps and coupling: parasitic noise, skip entirely
-                            # (no step emitted, no walk)
-                            continue
-                        else:
-                            # Real circuit element with non-galvanic terminals:
-                            # transistors (X with model name), sources (V/I/B/E/F/G/H),
-                            # or any other leaf primitive. Emit endpoint so the user
-                            # sees where the trace terminated; do not walk further.
-                            pin_label = curr_pin_name or f"{inst.cell_type}:{net_pos}"
-                            endpoint_step = TraceStep(
-                                cell=inst.cell_type,
-                                pin_or_net=pin_label,
-                                direction="endpoint",
-                                instance_name=inst.name,
-                                inst_stack=inst_stack,
-                            )
-                            path_with_endpoint = path + [endpoint_step]
-                            if len(path_with_endpoint) > 1:
-                                all_paths.append(path_with_endpoint)
-
-                subckt = self.parser.subckts.get(curr_cell)
-                if subckt and curr_net in subckt.pin_to_pos and inst_stack:
-                    pin_pos = subckt.pin_to_pos[curr_net]
-                    inst_name, parent_cell = inst_stack[-1]
-                    instances = [
-                        i
-                        for i in self.parser.instances_by_celltype.get(curr_cell, [])
-                        if i.name == inst_name and i.parent_cell == parent_cell
-                    ]
-                    new_stack = inst_stack[:-1]
-
-                    for inst in instances:
-                        if pin_pos >= len(inst.nets):
-                            continue
-                        parent_net = inst.nets[pin_pos]
-                        if (inst.parent_cell, parent_net) in path_cells:
-                            continue
-
-                        new_step = TraceStep(
-                            cell=inst.parent_cell,
-                            pin_or_net=parent_net,
-                            direction="up",
-                            instance_name=inst.name,
-                            inst_stack=new_stack,
-                        )
-                        queue.append((inst.parent_cell, parent_net, new_stack, path + [new_step]))
-
-                # Dead-end detection: only fires when this iteration neither queued
-                # a new state nor recorded a path via an endpoint emission. The extra
-                # all_paths-grew guard prevents the fragment-duplication seen when a
-                # lateral-walk endpoint records [start, thru(R), endpoint(X)] and the
-                # dead-end heuristic would then also record the prefix [start, thru(R)].
-                if (
-                    not target_name
-                    and len(queue) == queue_len_before
-                    and len(all_paths) == all_paths_len_before
-                    and len(path) > 1
-                ):
-                    all_paths.append(path)
+            all_paths.extend(paths)
 
         return all_paths
 
@@ -533,6 +409,227 @@ class BidirectionalTracer:
             and re.search(r"(?:\[\d+\]|<\d+>)$", p)
             and re.sub(r"(?:\[\d+\]|<\d+>)$", "", p) == name
         ]
+
+    def _bfs_from_seed(
+        self,
+        start_cell: str,
+        start_net: str,
+        target_name: Optional[str] = None,
+        max_depth: Optional[int] = None,
+        initial_stack: tuple[tuple[str, str], ...] | None = None,
+        initial_inst_name: Optional[str] = None,
+    ) -> list[list[TraceStep]]:
+        """
+        Core BFS traversal logic: start from a seed cell and net, explore paths.
+
+        This is a private helper shared by trace() and trace_net() to avoid duplication.
+
+        Inputs:
+            start_cell: Starting subckt cell type
+            start_net: Starting net/pin name within start_cell
+            target_name: Optional target cell/instance name
+            max_depth: Optional path depth cap
+            initial_stack: Optional initial instance stack (hierarchical context)
+            initial_inst_name: Optional initial instance name for the TraceStep
+
+        Outputs:
+            List of trace paths (each path is a list of TraceStep objects)
+        """
+        if initial_stack is None:
+            initial_stack = ()
+
+        initial_step = TraceStep(
+            cell=start_cell,
+            pin_or_net=start_net,
+            direction="start",
+            instance_name=initial_inst_name,
+            inst_stack=initial_stack,
+        )
+
+        queue: deque[tuple[str, str, tuple[tuple[str, str], ...], list[TraceStep]]] = deque(
+            [(start_cell, start_net, initial_stack, [initial_step])]
+        )
+        visited = set()
+        all_paths = []
+
+        # Resolve target once if provided
+        target_set = set()
+        if target_name:
+            target_matches = self.resolve_name(target_name)
+            for cell_type, inst_chain in target_matches:
+                leaf_ctx = inst_chain[-1] if inst_chain else None
+                target_set.add((cell_type, leaf_ctx))
+
+        while queue:
+            curr_cell, curr_net, inst_stack, path = queue.popleft()
+
+            state_key = (curr_cell, curr_net, inst_stack)
+            if state_key in visited:
+                continue
+            visited.add(state_key)
+
+            if curr_net == "":
+                continue
+
+            if re.match(r"^\d+'[bdohBDOH][0-9a-fA-FxXzZ_?]+$", curr_net):
+                if len(path) > 1:
+                    all_paths.append(path)
+                continue
+
+            if re.match(r"^(VDD|VSS)", curr_net) and len(path) > 1:
+                all_paths.append(path)
+                continue
+
+            if max_depth is not None and len(path) > max_depth:
+                all_paths.append(path)
+                continue
+
+            if target_name:
+                curr_ctx = inst_stack[-1] if inst_stack else None
+                if (curr_cell, curr_ctx) in target_set or (curr_cell, None) in target_set:
+                    all_paths.append(path)
+                    continue
+
+            queue_len_before = len(queue)
+            all_paths_len_before = len(all_paths)
+            path_cells = {(s.cell, s.pin_or_net) for s in path}
+
+            for equiv_net in self._equivalence_class(curr_cell, curr_net):
+                if equiv_net == curr_net:
+                    continue
+                if (curr_cell, equiv_net) in path_cells:
+                    continue
+                alias_step = TraceStep(
+                    cell=curr_cell,
+                    pin_or_net=equiv_net,
+                    direction="alias",
+                    instance_name=None,
+                    inst_stack=inst_stack,
+                )
+                queue.append((curr_cell, equiv_net, inst_stack, path + [alias_step]))
+
+            for inst in self.parser.instances_by_parent.get(curr_cell, []):
+                if curr_net not in inst.nets:
+                    continue
+                net_pos = inst.nets.index(curr_net)
+                child_subckt = self.parser.subckts.get(inst.cell_type)
+
+                # Hierarchical descent: if child_subckt exists, has a body, and pin index is valid
+                if child_subckt and not _is_primitive_shell(self.parser, child_subckt) and net_pos < len(child_subckt.pins):
+                    child_pin = child_subckt.pins[net_pos]
+                    if (inst.cell_type, child_pin) not in path_cells:
+                        new_stack_down = inst_stack + ((inst.name, curr_cell),)
+                        new_step = TraceStep(
+                            cell=inst.cell_type,
+                            pin_or_net=child_pin,
+                            direction="down",
+                            instance_name=inst.name,
+                            inst_stack=new_stack_down,
+                        )
+                        queue.append(
+                            (inst.cell_type, child_pin, new_stack_down, path + [new_step])
+                        )
+
+                # Lateral walk: leaf primitive (no SubcktDef) or empty primitive shell
+                # Only R and L allow galvanic thru-walk; others are endpoints
+                elif not child_subckt or _is_primitive_shell(self.parser, child_subckt):
+                    # SPF convention: an instance terminal connection appears as
+                    # '<instance>:<pin>' (e.g. 'inst/M1:G'). When present,
+                    # extract the trailing pin name (D/G/S/B for MOSFETs, ...)
+                    # so the trace shows real pin names instead of cell:position.
+                    curr_pin_name = _spf_pin_from_net(curr_net)
+                    if inst.cell_type.upper() in _LATERAL_WALK_THRU_TYPES:
+                        # Galvanic thru-walk: emit "thru" and continue tracing.
+                        # Label prefers the device value (e.g. <1.5ohm> for R,
+                        # <2nH> for L) so the user sees physical magnitude;
+                        # falls back to the SPF entry-pin name or
+                        # cell_type:position when value is unavailable.
+                        value = inst.params.get("_value") if hasattr(inst, "params") else None
+                        if value:
+                            unit = "ohm" if inst.cell_type.upper() == "R" else "H"
+                            thru_label = f"<{value}{unit}>"
+                        else:
+                            thru_label = curr_pin_name or f"{inst.cell_type}:{net_pos}"
+                        for alt_pos, alt_net in enumerate(inst.nets):
+                            if alt_pos == net_pos:
+                                continue  # Skip the current position
+                            if (curr_cell, alt_net) in path_cells:
+                                continue  # Skip if already visited
+
+                            thru_step = TraceStep(
+                                cell=inst.cell_type,
+                                pin_or_net=thru_label,
+                                direction="thru",
+                                instance_name=inst.name,
+                                inst_stack=inst_stack,
+                            )
+                            queue.append((curr_cell, alt_net, inst_stack, path + [thru_step]))
+                    elif inst.cell_type.upper() in _LATERAL_SKIP_TYPES:
+                        # Caps and coupling: parasitic noise, skip entirely
+                        # (no step emitted, no walk)
+                        continue
+                    else:
+                        # Real circuit element with non-galvanic terminals:
+                        # transistors (X with model name), sources (V/I/B/E/F/G/H),
+                        # or any other leaf primitive. Emit endpoint so the user
+                        # sees where the trace terminated; do not walk further.
+                        # Prefer synthesized pin label if child_subckt is a primitive shell.
+                        if child_subckt and _is_primitive_shell(self.parser, child_subckt):
+                            pin_label = child_subckt.pins[net_pos] if net_pos < len(child_subckt.pins) else curr_pin_name or f"{inst.cell_type}:{net_pos}"
+                        else:
+                            pin_label = curr_pin_name or f"{inst.cell_type}:{net_pos}"
+                        endpoint_step = TraceStep(
+                            cell=inst.cell_type,
+                            pin_or_net=pin_label,
+                            direction="endpoint",
+                            instance_name=inst.name,
+                            inst_stack=inst_stack,
+                        )
+                        path_with_endpoint = path + [endpoint_step]
+                        if len(path_with_endpoint) > 1:
+                            all_paths.append(path_with_endpoint)
+
+            subckt = self.parser.subckts.get(curr_cell)
+            if subckt and curr_net in subckt.pin_to_pos and inst_stack:
+                pin_pos = subckt.pin_to_pos[curr_net]
+                inst_name, parent_cell = inst_stack[-1]
+                instances = [
+                    i
+                    for i in self.parser.instances_by_celltype.get(curr_cell, [])
+                    if i.name == inst_name and i.parent_cell == parent_cell
+                ]
+                new_stack = inst_stack[:-1]
+
+                for inst in instances:
+                    if pin_pos >= len(inst.nets):
+                        continue
+                    parent_net = inst.nets[pin_pos]
+                    if (inst.parent_cell, parent_net) in path_cells:
+                        continue
+
+                    new_step = TraceStep(
+                        cell=inst.parent_cell,
+                        pin_or_net=parent_net,
+                        direction="up",
+                        instance_name=inst.name,
+                        inst_stack=new_stack,
+                    )
+                    queue.append((inst.parent_cell, parent_net, new_stack, path + [new_step]))
+
+            # Dead-end detection: only fires when this iteration neither queued
+            # a new state nor recorded a path via an endpoint emission. The extra
+            # all_paths-grew guard prevents the fragment-duplication seen when a
+            # lateral-walk endpoint records [start, thru(R), endpoint(X)] and the
+            # dead-end heuristic would then also record the prefix [start, thru(R)].
+            if (
+                not target_name
+                and len(queue) == queue_len_before
+                and len(all_paths) == all_paths_len_before
+                and len(path) > 1
+            ):
+                all_paths.append(path)
+
+        return all_paths
 
     def trace_pins(
         self,
@@ -590,12 +687,80 @@ class BidirectionalTracer:
 
         return results
 
+    def trace_net(
+        self,
+        net_name: str,
+        cell_filter: Optional[str] = None,
+        target_name: Optional[str] = None,
+        max_depth: Optional[int] = None,
+    ) -> dict[str, list[list[TraceStep]]]:
+        """
+        Trace paths starting from a NET (not a pin).
 
-def format_path(path: list[TraceStep]) -> str:
+        Finds all (subckt, net) pairs where net_name appears on any instance
+        terminal in that subckt; seeds the existing BFS with each match;
+        returns a dict keyed by `<subckt_name>:<net_name>` to disambiguate when
+        the same net name exists in multiple subckts.
+
+        Inputs:
+            net_name: The net to start from
+            cell_filter: Optional subckt name; restricts search to that one subckt
+            target_name: Optional target cell/instance
+            max_depth: Optional path depth cap
+
+        Outputs:
+            dict mapping `<subckt>:<net>` -> list of TraceStep paths; empty dict
+            if net not found anywhere
+        """
+        results: dict[str, list[list[TraceStep]]] = {}
+
+        # Enumerate subckts to search
+        subckts_to_search = (
+            [cell_filter] if cell_filter else list(self.parser.subckts.keys())
+        )
+
+        for sbckt_nm in subckts_to_search:
+            if sbckt_nm not in self.parser.subckts:
+                continue
+
+            # Look for net_name in instances of this subckt
+            insts = self.parser.instances_by_parent.get(sbckt_nm, [])
+            found = False
+            for inst in insts:
+                if net_name not in inst.nets:
+                    continue
+
+                # Found the net; seed the trace from this (subckt, net) pair
+                found = True
+                break
+
+            if not found:
+                continue
+
+            # Use the shared BFS helper seeded from the net (not a pin)
+            # initial_stack is empty; initial_inst_name is None (net-mode doesn't start from a specific instance)
+            all_paths = self._bfs_from_seed(
+                sbckt_nm,
+                net_name,
+                target_name=target_name,
+                max_depth=max_depth,
+                initial_stack=(),
+                initial_inst_name=None,
+            )
+
+            # Store results keyed by <subckt>:<net>
+            key = f"{sbckt_nm}:{net_name}"
+            results[key] = all_paths
+
+        return results
+
+
+def format_path(path: list[TraceStep], spef_ovly: Any | None = None) -> str:
     """Format a trace path as a single line.
 
     Args:
         path: List of TraceStep objects representing a path.
+        spef_ovly: Optional SpefOverlay for annotating steps with capacitance/resistance.
 
     Returns:
         Formatted path string.
@@ -634,5 +799,19 @@ def format_path(path: list[TraceStep]) -> str:
                 inst = "<internal>"
             else:
                 inst = "/".join(s[0] for s in rel)
-        parts.append(f"{step.cell}|{inst}|{step.pin_or_net}")
+
+        step_str = f"{step.cell}|{inst}|{step.pin_or_net}"
+
+        # Annotate with SPEF metadata if overlay provided
+        if spef_ovly is not None and hasattr(spef_ovly, "lookup"):
+            ovl_data = spef_ovly.lookup(step.pin_or_net)
+            if ovl_data:
+                cap_pf = ovl_data["C"] * 1e15  # Convert farads to fF
+                if ovl_data["R"] is not None:
+                    res_ohm = ovl_data["R"]
+                    step_str += f" <C={cap_pf:.3g}fF, R={res_ohm:.3g}ohm>"
+                else:
+                    step_str += f" <C={cap_pf:.3g}fF>"
+
+        parts.append(step_str)
     return " -- ".join(parts)

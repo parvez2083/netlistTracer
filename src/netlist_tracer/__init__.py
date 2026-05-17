@@ -4,6 +4,7 @@ from netlist_tracer.exceptions import NetlistError, NetlistParseError, TraceErro
 from netlist_tracer.model import Instance, SubcktDef, merge_aliases_into_subckt
 from netlist_tracer.parser import NetlistParser
 from netlist_tracer.parsers._numerics import parse_numerical
+from netlist_tracer.parsers.spef import SpefData, SpefOverlay
 from netlist_tracer.tracer import BidirectionalTracer, TraceStep, format_path
 
 __version__ = "0.4.1"
@@ -16,6 +17,8 @@ __all__ = [
     "BidirectionalTracer",
     "TraceStep",
     "format_path",
+    "SpefData",
+    "SpefOverlay",
     "parse_numerical",
     "NetlistError",
     "NetlistParseError",

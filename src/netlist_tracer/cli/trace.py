@@ -7,22 +7,39 @@ import logging
 import os
 import re
 import sys
+from typing import Any
 
 from netlist_tracer import __version__
+from netlist_tracer._logging import get_logger
 from netlist_tracer.exceptions import NetlistParseError
 from netlist_tracer.parser import NetlistParser
+from netlist_tracer.parsers.spef import SpefOverlay, parse_spef
 from netlist_tracer.tracer import BidirectionalTracer, TraceStep, format_path
 
+_logger = get_logger(__name__)
 
-def _format_step_for_json(step: TraceStep) -> dict:
+
+def _format_step_for_json(step: TraceStep, spef_ovly: Any | None = None) -> dict:
     """Convert a TraceStep to JSON-serializable dict."""
-    return {
+    result = {
         "cell": step.cell,
         "pin_or_net": step.pin_or_net,
         "direction": step.direction,
         "instance_name": step.instance_name,
         "inst_stack": [list(item) for item in step.inst_stack],
     }
+
+    # Append SPEF metadata if available
+    if spef_ovly:
+        ovl_dt = spef_ovly.lookup(step.pin_or_net)
+        if ovl_dt:
+            result["spef"] = {  # type: ignore
+                "C": ovl_dt["C"],
+                "R": ovl_dt["R"],
+                "pins": ovl_dt["pins"],
+            }
+
+    return result
 
 
 def main() -> int:
@@ -37,14 +54,28 @@ def main() -> int:
     parser.add_argument(
         "-netlist", required=True, help="Path to netlist file or directory of .sv/.v files"
     )
-    parser.add_argument("-cell", required=True, help="Start cell or instance name")
+    parser.add_argument(
+        "-cell", required=False, help="Start cell or instance name (optional with -net)"
+    )
     parser.add_argument(
         "-pin",
         action="append",
         default=None,
         help="Pin name(s) to trace. Exact bit-level (e.g. data[3]) or bare bus base name "
         "(e.g. data, expands to all data[0..N]). Comma-separated or repeated. "
-        "Omit to trace every bit-level pin of cell.",
+        "Omit to trace every bit-level pin of cell. Mutually exclusive with -net.",
+    )
+    parser.add_argument(
+        "-net",
+        default=None,
+        help="Net name to trace (alternative to -pin). Mutually exclusive with -pin. "
+        "Traces from the specified net through all subckts containing it.",
+    )
+    parser.add_argument(
+        "-spef",
+        default=None,
+        help="Optional SPEF file (.spef or .spef.gz) to overlay parasitic metadata "
+        "(capacitance/resistance) on traced paths.",
     )
     parser.add_argument("-target", default=None, help="Target cell or instance name (optional)")
     parser.add_argument(
@@ -74,6 +105,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Post-validation: enforce mutually exclusive flags and requirements
+    if args.net and args.pin:
+        print("ERROR: cannot combine -net with -pin", file=sys.stderr)
+        return 1
+
+    if args.spef and not args.netlist:
+        print("ERROR: SPEF overlay requires a primary netlist", file=sys.stderr)
+        return 1
+
+    if args.net and not args.cell:
+        # -net mode: -cell is optional (becomes a filter)
+        pass
+    elif args.pin and not args.cell:
+        # -pin mode: -cell is required
+        print("ERROR: -cell is required with -pin mode", file=sys.stderr)
+        return 1
+    elif not args.net and not args.pin and not args.cell:
+        # Neither -net nor -pin provided, and no -cell: error
+        print("ERROR: -cell is required when neither -net nor -pin is provided", file=sys.stderr)
+        return 1
+
     # Set logging level for JSON output
     if args.trace_format == "json":
         logging.getLogger().setLevel(logging.WARNING)
@@ -96,7 +148,7 @@ def main() -> int:
         all_pins: list[str] = []
         for pin_spec in args.pin:
             all_pins.extend(p.strip() for p in pin_spec.split(",") if p.strip())
-        pins = list(dict.fromkeys(all_pins))  # dedupe while preserving order
+        pins = list(dict.fromkeys(all_pins))  # type: ignore  # dedupe while preserving order
 
     if not os.path.isfile(netlist_file) and not os.path.isdir(netlist_file):
         print(f"ERROR: Netlist file or directory not found: {netlist_file}")
@@ -163,31 +215,52 @@ def main() -> int:
 
     tracer = BidirectionalTracer(nl_parser)
 
-    # Validate start_name resolves before doing any output work, to avoid the
-    # misleading "Tracing: <0 pins>" headers + format-help block.
-    if not tracer.resolve_name(start_name):
-        print(
-            f"ERROR: '{start_name}' not found as cell type or instance name",
-            file=sys.stderr,
-        )
-        # Suggest similar cell names using fuzzy matching
-        all_cells = list(nl_parser.subckts.keys())
-        suggestions = difflib.get_close_matches(start_name, all_cells, n=10, cutoff=0.6)
-        if suggestions:
-            print(f"Did you mean: {suggestions}", file=sys.stderr)
-        return 1
+    # Parse SPEF overlay if provided
+    spef_ovly = None
+    if args.spef:
+        try:
+            spef_dt = parse_spef(args.spef)
+            spef_ovly = SpefOverlay(spef_dt)
+            _logger.info(f"Loaded SPEF overlay from {args.spef} with {len(spef_dt.nets)} nets")
+        except Exception as e:
+            print(f"ERROR: Failed to parse SPEF file: {e}", file=sys.stderr)
+            return 1
 
-    # Trace all requested pins
-    results = tracer.trace_pins(
-        start_name, pins=pins, target_name=target_name, max_depth=args.max_depth
-    )
+    # Handle per-net tracing mode (new)
+    if args.net:
+        results = tracer.trace_net(
+            args.net, cell_filter=start_name, target_name=target_name, max_depth=args.max_depth
+        )
+        mode = "net"
+    else:
+        # Handle per-pin tracing mode (existing)
+        # Validate start_name resolves before doing any output work, to avoid the
+        # misleading "Tracing: <0 pins>" headers + format-help block.
+        if not tracer.resolve_name(start_name):
+            print(
+                f"ERROR: '{start_name}' not found as cell type or instance name",
+                file=sys.stderr,
+            )
+            # Suggest similar cell names using fuzzy matching
+            all_cells = list(nl_parser.subckts.keys())
+            suggestions = difflib.get_close_matches(start_name, all_cells, n=10, cutoff=0.6)
+            if suggestions:
+                print(f"Did you mean: {suggestions}", file=sys.stderr)
+            return 1
+
+        # Trace all requested pins
+        results = tracer.trace_pins(
+            start_name, pins=pins, target_name=target_name, max_depth=args.max_depth
+        )
+        mode = "pin"
 
     # If any explicitly-requested pin can't be expanded to bit-level pins
     # (neither an exact pin match nor a bus base name with indexed members),
     # tracer.trace() already printed "ERROR: Pin '...' not found" plus the
     # "Did you mean: [...]" suggestions. Exit non-zero so the user (or
     # caller scripts) sees the failure.
-    if pins is not None:
+    # Skip this validation in net mode (pins are not applicable).
+    if pins is not None and mode == "pin" and start_name:
         bad = False
         for start_cell, _ in tracer.resolve_name(start_name):
             subckt = nl_parser.subckts.get(start_cell)
@@ -199,18 +272,24 @@ def main() -> int:
 
     # Output in requested format
     if args.trace_format == "json":
-        return _output_json(nl_parser, start_name, target_name, args.max_depth, results)
+        return _output_json(
+            nl_parser, start_name, target_name, args.max_depth, results, spef_ovly, mode, args.spef
+        )
     else:
-        return _output_text(nl_parser, tracer, start_name, target_name, results, used_omit_mode)
+        return _output_text(
+            nl_parser, tracer, start_name, target_name, results, used_omit_mode, spef_ovly, mode
+        )
 
 
 def _output_text(
     nl_parser: NetlistParser,
     tracer: BidirectionalTracer,
-    start_name: str,
+    start_name: str | None,
     target_name: str | None,
     results: dict[str, list[list[TraceStep]]],
     used_omit_mode: bool,
+    spef_ovly: Any | None = None,
+    mode: str = "pin",
 ) -> int:
     """Output results in text format (with backward-compat single-pin handling)."""
     print(f"Format: {nl_parser.format}")
@@ -227,10 +306,20 @@ def _output_text(
         else:
             print(f"  -> cell type {cell_type}")
 
-    start_matches = tracer.resolve_name(start_name)
-    print(f"\nStart: {start_name}")
-    for cell_type, chain in start_matches:
-        _print_match(cell_type, chain)
+    # In net mode without -cell, skip the Start: resolution block and emit header from results keys instead
+    if mode == "net" and start_name is None:
+        # Net-mode without cell filter: print net header instead
+        print("\nNet(s) traced (no cell filter):")
+        for result_key in sorted(results.keys()):
+            subckt_name = result_key.split(":")[0] if ":" in result_key else result_key
+            net_name = result_key.split(":", 1)[1] if ":" in result_key else result_key
+            print(f"  -> net {net_name} in subckt {subckt_name}")
+    else:
+        # Pin mode, or net mode with -cell: show Start: resolution
+        start_matches = tracer.resolve_name(start_name) if start_name else []
+        print(f"\nStart: {start_name}")
+        for cell_type, chain in start_matches:
+            _print_match(cell_type, chain)
 
     if target_name:
         target_matches = tracer.resolve_name(target_name)
@@ -266,7 +355,7 @@ def _output_text(
         seen = set()
         unique_paths = []
         for path in paths:
-            sig = format_path(path)
+            sig = format_path(path, spef_ovly)
             if sig in seen:
                 continue
             seen.add(sig)
@@ -312,7 +401,7 @@ def _output_text(
             seen = set()
             unique_paths = []
             for path in paths:
-                sig = format_path(path)
+                sig = format_path(path, spef_ovly)
                 if sig in seen:
                     continue
                 seen.add(sig)
@@ -320,7 +409,10 @@ def _output_text(
 
             print()
             print("=" * 60)
-            print(f"== Pin: {pin_name} ({len(unique_paths)} paths)")
+            if mode == "net":
+                print(f"== Net: {pin_name} ({len(unique_paths)} paths)")
+            else:
+                print(f"== Pin: {pin_name} ({len(unique_paths)} paths)")
             print("=" * 60)
 
             if not unique_paths:
@@ -335,10 +427,13 @@ def _output_text(
 
 def _output_json(
     nl_parser: NetlistParser,
-    start_name: str,
+    start_name: str | None,
     target_name: str | None,
     max_depth: int | None,
     results: dict[str, list[list[TraceStep]]],
+    spef_ovly: Any | None = None,
+    mode: str = "pin",
+    spef_path: str | None = None,
 ) -> int:
     """Output results in JSON format."""
     output: dict[str, object] = {
@@ -351,13 +446,21 @@ def _output_json(
         "pins": {},
     }
 
+    # Add SPEF overlay metadata if present
+    if spef_ovly and hasattr(spef_ovly, "data"):
+        output["spef_overlay"] = {
+            "file": spef_path or "unknown",
+            "design": getattr(spef_ovly.data, "design_name", ""),
+            "num_nets": len(spef_ovly.data.nets),
+        }
+
     pins_dict: dict[str, object] = {}
     for pin_name, paths in results.items():
         pin_entry = {
             "paths": [
                 {
-                    "formatted": format_path(path),
-                    "steps": [_format_step_for_json(step) for step in path],
+                    "formatted": format_path(path, spef_ovly),
+                    "steps": [_format_step_for_json(step, spef_ovly) for step in path],
                 }
                 for path in paths
             ]
