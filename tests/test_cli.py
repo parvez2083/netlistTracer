@@ -80,7 +80,7 @@ def test_cli_single_pin_byte_identical() -> None:
             str(netlist_path),
             "-cell",
             "picorv32",
-            "-pin",
+            "-net",
             "clk",
         ],
         capture_output=True,
@@ -102,7 +102,7 @@ def test_cli_multipin_sectioned() -> None:
     repo_root = Path(__file__).parent.parent
     netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
 
-    # Run the CLI with multiple pins
+    # Run the CLI with multiple nets (repeatable -net flag)
     result = subprocess.run(
         [
             "netlist-tracer",
@@ -110,9 +110,9 @@ def test_cli_multipin_sectioned() -> None:
             str(netlist_path),
             "-cell",
             "picorv32",
-            "-pin",
+            "-net",
             "clk",
-            "-pin",
+            "-net",
             "resetn",
         ],
         capture_output=True,
@@ -122,9 +122,9 @@ def test_cli_multipin_sectioned() -> None:
     assert result.returncode == 0, f"CLI failed: {result.stderr}"
     output = result.stdout
 
-    # Check for sectioning headers
-    assert "== Pin: clk" in output, "Missing section header for 'clk'"
-    assert "== Pin: resetn" in output, "Missing section header for 'resetn'"
+    # Check for sectioning headers (note: output says "Net:" now instead of "Pin:")
+    assert "== Net: clk" in output, "Missing section header for 'clk'"
+    assert "== Net: resetn" in output, "Missing section header for 'resetn'"
     assert "Tracing: picorv32.<2 pins>" in output, "Missing multi-pin tracing header"
 
 
@@ -245,7 +245,7 @@ def test_cli_edif_bad_cell_suggestion() -> None:
 
 
 def test_cli_edif_bad_pin_suggestion() -> None:
-    """Verify CLI provides suggestions when EDIF pin not found."""
+    """Verify CLI provides suggestions when EDIF net not found."""
     repo_root = Path(__file__).parent.parent
     netlist_path = repo_root / "tests/fixtures/vendored/AND_gate.edf"
 
@@ -256,15 +256,15 @@ def test_cli_edif_bad_pin_suggestion() -> None:
             str(netlist_path),
             "-cell",
             "logic_gate",
-            "-pin",
+            "-net",
             "qx",  # Near-miss to 'q' to trigger fuzzy suggestion
         ],
         capture_output=True,
         text=True,
     )
 
-    assert result.returncode != 0, "Should fail for nonexistent pin"
-    # Pin suggestions are printed to stdout, not stderr
+    assert result.returncode != 0, "Should fail for nonexistent net"
+    # Net suggestions are printed to stdout, not stderr
     assert "Did you mean" in (result.stderr + result.stdout), "Should provide fuzzy suggestion"
 
 
@@ -522,8 +522,8 @@ def test_cli_lib_unresolvable_returns_0_with_warning() -> None:
 
 
 def test_cli_peek_invalid_pin_early_exit(synthetic_spice_basic_sp: str) -> None:
-    """Test CLI exits early with error when invalid pin provided during peek."""
-    # Call CLI with a valid cell and an invalid pin
+    """Test CLI exits early with error when invalid net provided during peek."""
+    # Call CLI with a valid cell and an invalid net
     result = subprocess.run(
         [
             sys.executable,
@@ -533,7 +533,7 @@ def test_cli_peek_invalid_pin_early_exit(synthetic_spice_basic_sp: str) -> None:
             synthetic_spice_basic_sp,
             "-cell",
             "nand2",
-            "-pin",
+            "-net",
             "INVALID_PIN",
         ],
         capture_output=True,
@@ -541,14 +541,14 @@ def test_cli_peek_invalid_pin_early_exit(synthetic_spice_basic_sp: str) -> None:
     )
     # Should exit with code 1 (error)
     assert result.returncode == 1, f"Expected exit 1, got {result.returncode}"
-    # stderr should contain error message about pin not found
-    assert "Pin" in result.stderr or "pin" in result.stderr.lower()
+    # stderr should contain error message about net not found
+    assert "Net" in result.stderr or "net" in result.stderr.lower()
     assert "INVALID_PIN" in result.stderr or "not found" in result.stderr
 
 
 def test_cli_peek_valid_pin_no_regression(synthetic_spice_basic_sp: str) -> None:
-    """Test CLI with valid pin works same as before (no regression)."""
-    # Call CLI with valid cell and valid pin
+    """Test CLI with valid net works same as before (no regression)."""
+    # Call CLI with valid cell and valid net (pin)
     result = subprocess.run(
         [
             sys.executable,
@@ -558,7 +558,7 @@ def test_cli_peek_valid_pin_no_regression(synthetic_spice_basic_sp: str) -> None
             synthetic_spice_basic_sp,
             "-cell",
             "nand2",
-            "-pin",
+            "-net",
             "Y",
         ],
         capture_output=True,
@@ -566,12 +566,12 @@ def test_cli_peek_valid_pin_no_regression(synthetic_spice_basic_sp: str) -> None
     )
     # Should succeed
     assert result.returncode == 0, (
-        f"Expected exit 0 with valid pin; got {result.returncode}. stderr={result.stderr!r}"
+        f"Expected exit 0 with valid net; got {result.returncode}. stderr={result.stderr!r}"
     )
 
 
-def test_cli_net_rejects_pin(synthetic_spice_basic_sp: str) -> None:
-    """Test that -net and -pin cannot be combined."""
+def test_cli_pin_flag_rejected(synthetic_spice_basic_sp: str) -> None:
+    """Test that -pin flag is rejected as unrecognized (hard removal)."""
     result = subprocess.run(
         [
             sys.executable,
@@ -579,20 +579,20 @@ def test_cli_net_rejects_pin(synthetic_spice_basic_sp: str) -> None:
             "netlist_tracer.cli.trace",
             "-netlist",
             synthetic_spice_basic_sp,
-            "-net",
-            "sig_a",
+            "-cell",
+            "top",
             "-pin",
             "Y",
         ],
         capture_output=True,
         text=True,
     )
-    assert result.returncode == 1, "Should fail when both -net and -pin are supplied"
-    assert "cannot combine" in result.stderr.lower(), "Error message should mention the conflict"
+    assert result.returncode == 2, "Should fail with argparse error (exit code 2)"
+    assert "unrecognized arguments" in result.stderr, "Error message should mention unrecognized -pin flag"
 
 
-def test_cli_net_mode_finds_paths(synthetic_spice_basic_sp: str) -> None:
-    """Test that -net mode traces from a named net and finds paths."""
+def test_cli_net_mode_requires_cell(synthetic_spice_basic_sp: str) -> None:
+    """Test that -net mode requires -cell flag."""
     result = subprocess.run(
         [
             sys.executable,
@@ -606,10 +606,30 @@ def test_cli_net_mode_finds_paths(synthetic_spice_basic_sp: str) -> None:
         capture_output=True,
         text=True,
     )
+    assert result.returncode == 2, "Should fail with argparse error when -cell is missing"
+    assert "required" in result.stderr.lower(), "Error message should mention -cell is required"
+
+
+def test_cli_net_mode_finds_paths(synthetic_spice_basic_sp: str) -> None:
+    """Test that -net mode traces from a named net and finds paths with -cell."""
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "netlist_tracer.cli.trace",
+            "-netlist",
+            synthetic_spice_basic_sp,
+            "-cell",
+            "nand2",
+            "-net",
+            "Y",
+        ],
+        capture_output=True,
+        text=True,
+    )
     assert result.returncode == 0, f"CLI failed: {result.stderr}"
-    # Verify net-mode output contains net-related text
-    assert "net" in result.stdout.lower(), \
-        "Output should contain reference to traced net"
+    # Verify output is generated
+    assert len(result.stdout) > 0, "Should generate trace output"
 
 
 def test_cli_plus_define_basic() -> None:
@@ -625,7 +645,7 @@ def test_cli_plus_define_basic() -> None:
             str(netlist_path),
             "-cell",
             "picorv32",
-            "-pin",
+            "-net",
             "clk",
             "+define+TEST_MACRO",
         ],
@@ -651,7 +671,7 @@ def test_cli_plus_define_with_value() -> None:
             str(netlist_path),
             "-cell",
             "picorv32",
-            "-pin",
+            "-net",
             "clk",
             "+define+MACRO=VAL",
         ],
@@ -679,7 +699,7 @@ def test_cli_plus_incdir_basic() -> None:
                 str(netlist_path),
                 "-cell",
                 "picorv32",
-                "-pin",
+                "-net",
                 "clk",
                 f"+incdir+{tmpdir}",
             ],
@@ -703,7 +723,7 @@ def test_cli_plus_multiple_defines() -> None:
             str(netlist_path),
             "-cell",
             "picorv32",
-            "-pin",
+            "-net",
             "clk",
             "+define+MACRO1",
             "+define+MACRO2",
@@ -731,7 +751,7 @@ def test_cli_plus_multiple_repeats() -> None:
                 str(netlist_path),
                 "-cell",
                 "picorv32",
-                "-pin",
+                "-net",
                 "clk",
                 "+define+MACRO_A",
                 "+define+MACRO_B",
@@ -750,9 +770,9 @@ def test_cli_plus_multiple_repeats() -> None:
 def test_cli_peek_accepts_indexed_pin_with_bare_bus() -> None:
     """Test that CLI accepts indexed pin name (e.g., data[4]) when peek discovered bare bus (data).
 
-    FIX 4 regression test: user passes -pin data[4] when peek only saw 'data' from
+    FIX 4 regression test: user passes -net data[4] when peek only saw 'data' from
     Verilog port declaration 'input [7:0] data'. The peek validation should accept
-    this because the bare bus 'data' was discovered, and downstream expand_pin will
+    this because the bare bus 'data' was discovered, and downstream expand_bus_base will
     handle the bit expansion.
     """
     import os
@@ -770,7 +790,7 @@ def test_cli_peek_accepts_indexed_pin_with_bare_bus() -> None:
             f.write("always @(posedge clk) valid <= |data;\n")
             f.write("endmodule\n")
 
-        # Run CLI with -pin data[4] (indexed form)
+        # Run CLI with -net data[4] (indexed form)
         result = subprocess.run(
             [
                 sys.executable,
@@ -780,7 +800,7 @@ def test_cli_peek_accepts_indexed_pin_with_bare_bus() -> None:
                 verilog_file,
                 "-cell",
                 "top",
-                "-pin",
+                "-net",
                 "data[4]",
             ],
             capture_output=True,

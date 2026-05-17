@@ -60,6 +60,25 @@ class NetlistParser:
         """
         return _pk_pns(flpth, cell, fmt=fmt)
 
+    @classmethod
+    def peek_nets(cls, flpth: str, cell: str, fmt: str | None = None) -> list[str] | None:
+        """Fast pre-scan to peek at a cell's internal net names WITHOUT running full parse.
+
+        Scans the subckt body (between .SUBCKT/.ENDS or module/endmodule) for
+        identifier-shaped tokens that appear in instance connections or net declarations.
+        Liberal extraction: false positives accepted; full parse validates downstream.
+
+        Inputs:
+            flpth: Path to netlist file or directory
+            cell: Cell/module name to find
+            fmt: Optional explicit format hint
+
+        Outputs:
+            list[str] of candidate internal net names if cell found, None otherwise
+        """
+        from netlist_tracer.parsers.peek import peek_nets as _pk_nets
+        return _pk_nets(flpth, cell, fmt=fmt)
+
     def __init__(
         self,
         filename: str,
@@ -923,20 +942,20 @@ class NetlistParser:
         return mismatches
 
     def dump_json(self, out_path: str) -> None:
-        """Write parsed model to JSON cache file.
+        """Write parsed model to JSON cache file with incremental streaming.
 
+        Writes subckts and instances incrementally to reduce peak memory usage.
         Output is compact (no indentation) and machine-oriented. Use
         `python3 -m json.tool < cache.json` to inspect by eye.
 
-        Schema version (v3) adds:
-          - Instance entries now include 'params' field when non-empty (omitted when empty)
-          - Top-level 'subckt_params' dict maps subckt name -> params dict for subckts with non-empty params
+        Schema version (v3) is UNCHANGED by streaming change. Round-trip via
+        json.load produces the same dict structure as the prior monolithic dump.
 
-        Schema version (v2) differences vs older caches the loader still
-        understands (v0/v1):
-          - Aliases stored as dict {lhs: rhs} (was list of [lhs, rhs] pairs)
-          - Compact JSON output (no indentation)
-          - No defensive list copies on pin/net references
+        Streaming writes:
+          - Metadata fields (schema_version, format, source)
+          - Subckts object: iterates self.subckts, writes each as name -> pins dict
+          - Instances array: iterates self.instances_by_parent, writes each instance
+          - Global nets and aliases at end
 
         Args:
             out_path: Output file path.
@@ -944,34 +963,86 @@ class NetlistParser:
         # Eager-flush all pending SPF files to ensure complete state in cache
         self.mtrl_all_pndg()
 
-        subckts_out = {name: sub.pins for name, sub in self.subckts.items()}
-        instances_out = [
-            {
-                "name": inst.name,
-                "cell_type": inst.cell_type,
-                "nets": inst.nets,
-                "parent_cell": inst.parent_cell,
-                **({"params": dict(inst.params)} if inst.params else {}),
-            }
-            for insts in self.instances_by_parent.values()
-            for inst in insts
-        ]
-        aliases_out = {name: dict(sub.aliases) for name, sub in self.subckts.items() if sub.aliases}
-        sbckt_prms = {name: dict(sub.params) for name, sub in self.subckts.items() if sub.params}
-        output = {
-            "schema_version": _CACHE_SCHEMA_VERSION,
-            "format": self.format,
-            "source": self.source_path,
-            "subckts": subckts_out,
-            "instances": instances_out,
-            "aliases": aliases_out,
-        }
-        if sbckt_prms:
-            output["subckt_params"] = sbckt_prms
         out_dir = os.path.dirname(os.path.abspath(out_path))
         if out_dir:
             os.makedirs(out_dir, exist_ok=True)
+
+        # Stream JSON incrementally to reduce peak memory
         with open(out_path, "w", buffering=65536) as fh:
-            json.dump(output, fh, separators=(",", ":"))
+            fh.write("{")
+
+            # Metadata
+            fh.write(json.dumps("schema_version", separators=(",", ":")))
+            fh.write(":")
+            fh.write(json.dumps(_CACHE_SCHEMA_VERSION, separators=(",", ":")))
+            fh.write(",")
+
+            fh.write(json.dumps("format", separators=(",", ":")))
+            fh.write(":")
+            fh.write(json.dumps(self.format, separators=(",", ":")))
+            fh.write(",")
+
+            fh.write(json.dumps("source", separators=(",", ":")))
+            fh.write(":")
+            fh.write(json.dumps(self.source_path, separators=(",", ":")))
+            fh.write(",")
+
+            # Subckts: write as dict of name -> pins
+            fh.write(json.dumps("subckts", separators=(",", ":")))
+            fh.write(":{")
+
+            first = True
+            for name, subckt in self.subckts.items():
+                if not first:
+                    fh.write(",")
+                first = False
+                fh.write(json.dumps(name, separators=(",", ":")))
+                fh.write(":")
+                fh.write(json.dumps(subckt.pins, separators=(",", ":")))
+
+            fh.write("}")
+            fh.write(",")
+
+            # Instances: write as array
+            fh.write(json.dumps("instances", separators=(",", ":")))
+            fh.write(":[")
+
+            first = True
+            for insts in self.instances_by_parent.values():
+                for inst in insts:
+                    if not first:
+                        fh.write(",")
+                    first = False
+
+                    inst_dict: dict[str, object] = {
+                        "name": inst.name,
+                        "cell_type": inst.cell_type,
+                        "nets": inst.nets,
+                        "parent_cell": inst.parent_cell,
+                    }
+                    if inst.params:
+                        inst_dict["params"] = dict(inst.params)
+
+                    fh.write(json.dumps(inst_dict, separators=(",", ":")))
+
+            fh.write("]")
+            fh.write(",")
+
+            # Aliases: write if any
+            aliases_out = {name: dict(sub.aliases) for name, sub in self.subckts.items() if sub.aliases}
+            fh.write(json.dumps("aliases", separators=(",", ":")))
+            fh.write(":")
+            fh.write(json.dumps(aliases_out, separators=(",", ":")))
+
+            # Subckt params: write if any
+            sbckt_prms = {name: dict(sub.params) for name, sub in self.subckts.items() if sub.params}
+            if sbckt_prms:
+                fh.write(",")
+                fh.write(json.dumps("subckt_params", separators=(",", ":")))
+                fh.write(":")
+                fh.write(json.dumps(sbckt_prms, separators=(",", ":")))
+
+            fh.write("}")
+
         kb = os.path.getsize(out_path) / 1024
         _logger.info(f"Output: {out_path} ({kb:.0f} KB)")

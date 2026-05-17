@@ -368,6 +368,43 @@ endmodule
             # The cell type should reflect the specialized parameter value from defparam
             assert "__WIDTH_8" in inst.cell_type
 
+    def test_genvar_for_with_block_label(self, synthetic_genvar_for_label_v):
+        """Test parsing generate-for with block label (genvar iteration).
+
+        Regression test for bug where generate-for blocks with labels were
+        pre-unrolled before the labeled extraction pass, losing the block label
+        and producing duplicate instance names instead of labeled ones.
+
+        Example: for (genvar i=0; i<3; i++) begin: gblock ... end
+        Should produce instances named gblock[0].ucell, gblock[1].ucell, gblock[2].ucell
+        NOT three instances all named ucell.
+        """
+        parser = NetlistParser(synthetic_genvar_for_label_v)
+        assert parser.format == "verilog"
+        assert len(parser.subckts) > 0, "genvar_for_label fixture should parse"
+        assert "my_top" in parser.subckts, "Should find my_top module"
+        assert "my_top" in parser.instances_by_parent, "Should find instances under my_top"
+
+        insts = parser.instances_by_parent["my_top"]
+        # Should have exactly 3 instances (one per iteration)
+        assert len(insts) == 3, (
+            f"my_top should have 3 instances (gblock[0].ucell, gblock[1].ucell, gblock[2].ucell), "
+            f"got {len(insts)} instances: {[i.name for i in insts]}"
+        )
+
+        # Verify instance names include the block label with index
+        inst_names = sorted([i.name for i in insts])
+        expected_names = ["gblock[0].ucell", "gblock[1].ucell", "gblock[2].ucell"]
+        assert inst_names == expected_names, (
+            f"Instance names should be {expected_names}, got {inst_names}"
+        )
+
+        # Verify all instances reference the correct cell type
+        for inst in insts:
+            assert inst.cell_type == "my_cell", (
+                f"Instance {inst.name} should reference my_cell, got {inst.cell_type}"
+            )
+
 
 class TestVerilogA:
     """Tests for Verilog-A parser support."""

@@ -98,21 +98,15 @@ def main() -> int:
         "-netlist", required=True, help="Path to netlist file or directory of .sv/.v files"
     )
     parser.add_argument(
-        "-cell", required=False, help="Start cell or instance name (optional with -net)"
-    )
-    parser.add_argument(
-        "-pin",
-        action="append",
-        default=None,
-        help="Pin name(s) to trace. Exact bit-level (e.g. data[3]) or bare bus base name "
-        "(e.g. data, expands to all data[0..N]). Comma-separated or repeated. "
-        "Omit to trace every bit-level pin of cell. Mutually exclusive with -net.",
+        "-cell", required=True, help="Start cell or instance name (required)"
     )
     parser.add_argument(
         "-net",
+        action="append",
         default=None,
-        help="Net name to trace (alternative to -pin). Mutually exclusive with -pin. "
-        "Traces from the specified net through all subckts containing it.",
+        help="Signal name(s) to trace. Accepts pin name, internal net name, or bus base name "
+        "(expands to all indexed bits). Comma-separated or repeated. "
+        "Omit to trace every bit-level pin of cell.",
     )
     parser.add_argument("-target", default=None, help="Target cell or instance name (optional)")
     parser.add_argument(
@@ -125,23 +119,6 @@ def main() -> int:
         "other (text output). Default: None (text to stdout).",
     )
     args = parser.parse_args(filtered_argv)
-
-    # Post-validation: enforce mutually exclusive flags and requirements
-    if args.net and args.pin:
-        print("ERROR: cannot combine -net with -pin", file=sys.stderr)
-        return 1
-
-    if args.net and not args.cell:
-        # -net mode: -cell is optional (becomes a filter)
-        pass
-    elif args.pin and not args.cell:
-        # -pin mode: -cell is required
-        print("ERROR: -cell is required with -pin mode", file=sys.stderr)
-        return 1
-    elif not args.net and not args.pin and not args.cell:
-        # Neither -net nor -pin provided, and no -cell: error
-        print("ERROR: -cell is required when neither -net nor -pin is provided", file=sys.stderr)
-        return 1
 
     # Determine output format from -output extension
     otpt_fmt = "text"
@@ -156,64 +133,66 @@ def main() -> int:
     start_name = args.cell
     target_name = args.target
 
-    # Parse -pin arguments: build list from comma-separated and repeated flags
-    pins: list[str] | None = None
+    # Parse -net arguments: build list from comma-separated and repeated flags
+    nets: list[str] | None = None
     used_omit_mode = False
-    if args.pin is None:
-        # Omit-mode: no -pin flag provided
-        pins = None
+    if args.net is None:
+        # Omit-mode: no -net flag provided
+        nets = None
         used_omit_mode = True
     else:
         # Parse comma-separated and repeated flags
-        all_pins: list[str] = []
-        for pin_spec in args.pin:
-            all_pins.extend(p.strip() for p in pin_spec.split(",") if p.strip())
-        pins = list(dict.fromkeys(all_pins))  # type: ignore  # dedupe while preserving order
+        all_nets: list[str] = []
+        for net_spec in args.net:
+            all_nets.extend(n.strip() for n in net_spec.split(",") if n.strip())
+        nets = list(dict.fromkeys(all_nets))  # type: ignore  # dedupe while preserving order
 
     if not os.path.isfile(netlist_file) and not os.path.isdir(netlist_file):
         print(f"ERROR: Netlist file or directory not found: {netlist_file}")
         return 1
 
-    # Early-exit peek if both -cell and -pin provided
-    if start_name and pins is not None:
-        pk_rslt = NetlistParser.peek_pins(netlist_file, start_name, fmt=None)
+    # Early-exit peek if both -cell and -net provided
+    if start_name and nets is not None:
+        pk_pins = NetlistParser.peek_pins(netlist_file, start_name, fmt=None)
+        pk_nets = NetlistParser.peek_nets(netlist_file, start_name, fmt=None)
 
-        if pk_rslt is not None:
-            # Peek succeeded: check pin validity
-            pn_st = set(pk_rslt)
+        if pk_pins is not None or pk_nets is not None:
+            # Peek succeeded: check signal validity
+            known_sigs = set()
+            if pk_pins:
+                known_sigs.update(pk_pins)
+            if pk_nets:
+                known_sigs.update(pk_nets)
+
             bus_bss = {
-                re.sub(r"\[\d+\]$|<\d+>$", "", p)
-                for p in pk_rslt
-                if re.search(r"\[\d+\]$|<\d+>$", p)
+                re.sub(r"\[\d+\]$|<\d+>$", "", s)
+                for s in known_sigs
+                if re.search(r"\[\d+\]$|<\d+>$", s)
             }
 
             msng = []
-            for pn_csv in pins:
-                for pn in pn_csv.split(","):
-                    pn = pn.strip()
-                    if not pn:
-                        continue
-                    pn_base = re.sub(r"\[\d+\]$|<\d+>$", "", pn)
-                    is_indexed = pn != pn_base
-                    if pn in pn_st or pn in bus_bss or (is_indexed and pn_base in pn_st):
-                        continue
-                    msng.append(pn)
+            for net_name in nets:
+                net_base = re.sub(r"\[\d+\]$|<\d+>$", "", net_name)
+                is_indexed = net_name != net_base
+                if net_name in known_sigs or net_name in bus_bss or (is_indexed and net_base in known_sigs):
+                    continue
+                msng.append(net_name)
 
             if msng:
                 from netlist_tracer.tracer import suggest_pins
 
-                for pn in msng:
+                for net in msng:
                     print(
-                        f"ERROR: Pin '{pn}' not found in cell '{start_name}' (peek)",
+                        f"ERROR: Net '{net}' not found in cell '{start_name}' (peek)",
                         file=sys.stderr,
                     )
-                    sgg = suggest_pins(pn, pk_rslt)
+                    sgg = suggest_pins(net, list(known_sigs))
                     if sgg:
                         print(f"Did you mean: {sgg[:10]}", file=sys.stderr)
                     else:
                         print(
-                            f"Available pins ({len(pk_rslt)} total): "
-                            f"{pk_rslt[:10]}{'...' if len(pk_rslt) > 10 else ''}",
+                            f"Available signals ({len(known_sigs)} total): "
+                            f"{sorted(known_sigs)[:10]}{'...' if len(known_sigs) > 10 else ''}",
                             file=sys.stderr,
                         )
                 sys.exit(1)
@@ -235,47 +214,36 @@ def main() -> int:
 
     tracer = BidirectionalTracer(nl_parser)
 
-    # Handle per-net tracing mode (new)
-    if args.net:
-        results = tracer.trace_net(
-            args.net, cell_filter=start_name, target_name=target_name, max_depth=args.max_depth
+    # Validate start_name resolves before doing any output work
+    if not tracer.resolve_name(start_name):
+        print(
+            f"ERROR: '{start_name}' not found as cell type or instance name",
+            file=sys.stderr,
         )
-        mode = "net"
-    else:
-        # Handle per-pin tracing mode (existing)
-        # Validate start_name resolves before doing any output work, to avoid the
-        # misleading "Tracing: <0 pins>" headers + format-help block.
-        if not tracer.resolve_name(start_name):
-            print(
-                f"ERROR: '{start_name}' not found as cell type or instance name",
-                file=sys.stderr,
-            )
-            # Suggest similar cell names using fuzzy matching
-            all_cells = list(nl_parser.subckts.keys())
-            suggestions = difflib.get_close_matches(start_name, all_cells, n=10, cutoff=0.6)
-            if suggestions:
-                print(f"Did you mean: {suggestions}", file=sys.stderr)
-            return 1
+        # Suggest similar cell names using fuzzy matching
+        all_cells = list(nl_parser.subckts.keys())
+        suggestions = difflib.get_close_matches(start_name, all_cells, n=10, cutoff=0.6)
+        if suggestions:
+            print(f"Did you mean: {suggestions}", file=sys.stderr)
+        return 1
 
-        # Trace all requested pins
-        results = tracer.trace_pins(
-            start_name, pins=pins, target_name=target_name, max_depth=args.max_depth
-        )
-        mode = "pin"
+    # Unified trace mode: -net now handles pins, internal nets, and bus bases
+    results = tracer.trace_net(
+        nets=nets, cell_name=start_name, target_name=target_name, max_depth=args.max_depth
+    )
+    mode = "net"
 
-    # If any explicitly-requested pin can't be expanded to bit-level pins
-    # (neither an exact pin match nor a bus base name with indexed members),
-    # tracer.trace() already printed "ERROR: Pin '...' not found" plus the
-    # "Did you mean: [...]" suggestions. Exit non-zero so the user (or
-    # caller scripts) sees the failure.
-    # Skip this validation in net mode (pins are not applicable).
-    if pins is not None and mode == "pin" and start_name:
+    # If any explicitly-requested net can't be expanded, tracer.trace_net()
+    # already printed errors. Exit non-zero.
+    if nets is not None and start_name:
         bad = False
         for start_cell, _ in tracer.resolve_name(start_name):
             subckt = nl_parser.subckts.get(start_cell)
-            if subckt and any(not tracer.expand_pin(subckt, p) for p in pins):
-                bad = True
-                break
+            if subckt:
+                insts = nl_parser.instances_by_parent.get(start_cell, [])
+                if any(not tracer.expand_bus_base(subckt, insts, n) for n in nets):
+                    bad = True
+                    break
         if bad:
             return 1
 

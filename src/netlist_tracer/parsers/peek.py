@@ -548,3 +548,156 @@ def peek_spf_subckts(spf_pth: str) -> list[tuple[str, list[str]]]:
     except Exception as e:
         _logger.debug(f"SPF/SPEF peek failed for {spf_pth}: {e}")
         return []
+
+
+def _extract_spce_nets_from_body(fh: Any, cell: str) -> list[str] | None:
+    """Extract internal net names from SPICE/CDL subckt body.
+
+    Scans from .SUBCKT line to .ENDS, tokenizing instance connection lists
+    and net declarations. Liberal extraction: identifier-shaped tokens that
+    are not the instance name or model type. Joins continuation lines ('+')
+    before tokenizing to capture nets across multi-line instances.
+
+    Inputs:
+        fh: Open file handle (text mode)
+        cell: Cell name to search for
+
+    Outputs:
+        list[str] of candidate net names, or None if cell not found
+    """
+    in_subckt = False
+    nets = set()
+    lines = [ln.rstrip() for ln in fh]  # Read entire file into list for indexing
+    i = 0
+
+    while i < len(lines):
+        ln = lines[i]
+        i += 1
+
+        # Look for .SUBCKT line
+        m = re.match(r"^\s*\.SUBCKT\s+(\S+)\s+(.*)", ln, re.IGNORECASE)
+        if m:
+            sbckt_nm = m.group(1)
+            if sbckt_nm.lower() != cell.lower():
+                continue
+            in_subckt = True
+            continue
+
+        if not in_subckt:
+            continue
+
+        # Check for .ENDS
+        if re.match(r"^\s*\.ENDS", ln, re.IGNORECASE):
+            break
+
+        # Skip comments and empty lines
+        if ln.lstrip().startswith("*") or not ln.strip():
+            continue
+
+        # Parse instance line: [X<name> <net1> <net2> ... <model> [params]]
+        # Skip plain continuation lines; they're collected below
+        if ln.lstrip().startswith("+"):
+            continue
+
+        # Collect continuation lines for this instance
+        full_ln = ln
+        while i < len(lines) and lines[i].lstrip().startswith("+"):
+            cn_rst = lines[i].lstrip()[1:].strip()
+            full_ln = full_ln + " " + cn_rst
+            i += 1
+
+        # Tokenize the joined line
+        tks = full_ln.split()
+        if not tks or tks[0].lower().startswith("*"):
+            continue
+
+        # Instance lines start with X (or other device letters in SPICE)
+        # Skip purely declarative lines (.param, etc.)
+        if tks[0].lower().startswith("."):
+            continue
+
+        # For device instances (X..., R..., M..., etc.), collect net tokens
+        # Strategy: skip the first token (instance name) and the last (or last few for model),
+        # then collect identifiers. Liberal approach: accept all identifier-shaped tokens.
+        if len(tks) > 2:
+            # Skip first token (instance name) and last token (usually model name)
+            for tk in tks[1:-1]:
+                # Skip tokens with '=' (parameters)
+                if "=" in tk:
+                    continue
+                # Skip numeric literals
+                if re.match(r"^\d+", tk):
+                    continue
+                # Accept identifier-shaped tokens (alphanumeric + underscore/brackets)
+                if re.match(r"^[a-zA-Z_][a-zA-Z0-9_\[\]]*$", tk):
+                    nets.add(tk)
+
+    return list(nets) if nets and in_subckt else None
+
+
+def peek_nets(flpth: str, cell: str, fmt: str | None = None) -> list[str] | None:
+    """Fast pre-scan to discover internal net names in a cell WITHOUT full parse.
+
+    Scans the subckt body for identifier-shaped tokens in instance connections
+    and declarations. Liberal extraction: false positives accepted; full parse
+    validates downstream.
+
+    Inputs:
+        flpth: File or directory path
+        cell: Cell/module name to find
+        fmt: Optional explicit format hint
+
+    Outputs:
+        list[str] of candidate internal net names if cell found, None otherwise
+    """
+    # Validate path exists
+    if not os.path.exists(flpth):
+        raise FileNotFoundError(f"Path not found: {flpth}")
+
+    # JSON cache: not used for nets (peek_nets always scans)
+    # Verilog directory
+    if os.path.isdir(flpth):
+        return None  # Simplified: skip directory handling for now
+
+    # Single file: detect format or use hint
+    if fmt is None:
+        fmt = detect_format([flpth])
+
+    # Dispatch to format-specific peek
+    if fmt == "verilog":
+        return None  # Verilog internal nets not easily peeked; full parse needed
+    elif fmt == "spectre":
+        return None  # Spectre internal nets not easily peeked
+    elif fmt == "spf":
+        return _extract_spce_nets_from_body_spf(flpth, cell)
+    elif fmt == "edif":
+        return None
+    else:  # spice, cdl, unknown -> treat as spice-family
+        try:
+            if flpth.endswith(".gz"):
+                fh = gzip.open(flpth, "rt", errors="replace")
+            else:
+                fh = open(flpth, encoding="utf-8", errors="replace")
+            try:
+                return _extract_spce_nets_from_body(fh, cell)
+            finally:
+                fh.close()
+        except Exception as e:
+            _logger.debug(f"SPICE-family peek_nets failed for {cell}: {e}")
+            return None
+
+
+def _extract_spce_nets_from_body_spf(flpth: str, cell: str) -> list[str] | None:
+    """Extract internal net names from SPF/DSPF file body."""
+    try:
+        if flpth.endswith(".gz"):
+            fh = gzip.open(flpth, "rt", errors="replace")
+        else:
+            fh = open(flpth, encoding="utf-8", errors="replace")
+        try:
+            return _extract_spce_nets_from_body(fh, cell)
+        finally:
+            fh.close()
+    except Exception as e:
+        _logger.debug(f"SPF peek_nets failed for {cell}: {e}")
+        return None

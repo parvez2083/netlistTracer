@@ -756,6 +756,40 @@ def _sv_unroll_generate_for_blocks(
     return current_body
 
 
+def _sv_unroll_generate_if_case_blocks_to_fixed_point(
+    body: str, define_values: Optional[dict[str, int]] = None
+) -> str:
+    """
+    Unroll generate-if and generate-case blocks to fixed point.
+
+    Companion to _sv_unroll_generate_blocks_to_fixed_point but EXCLUDES generate-for
+    unrolling. Generate-for blocks must be handled by _sv_extract_instances's labeled
+    extraction (which preserves the `<label>[<i>].` instance-name prefix); pre-unrolling
+    them with the string-level unroller loses the block label.
+
+    Inputs:
+        body: Raw module body text
+        define_values: Resolved parameter/macro values for bound resolution (optional, defaults to {})
+
+    Outputs:
+        Transformed body string with generate-if and generate-case blocks unrolled to fixed-point.
+    """
+    if define_values is None:
+        define_values = {}
+    max_depth = 8
+    prev_body = None
+    current_body = body
+    iteration = 0
+    while iteration < max_depth:
+        prev_body = current_body
+        current_body = _sv_unroll_generate_if_blocks_once(current_body, define_values)
+        current_body = _sv_unroll_generate_case_blocks_once(current_body, define_values)
+        iteration += 1
+        if current_body == prev_body:
+            break
+    return current_body
+
+
 def _sv_unroll_generate_blocks_to_fixed_point(
     body: str, define_values: Optional[dict[str, int]] = None
 ) -> str:
@@ -1130,7 +1164,7 @@ def _sv_extract_instances(
         body = _RE_DOLLAR_SIZE.sub(_repl_size, body)
 
     # Unroll generate-if and generate-case blocks to fixed point
-    body = _sv_unroll_generate_blocks_to_fixed_point(body, define_values)
+    body = _sv_unroll_generate_if_case_blocks_to_fixed_point(body, define_values)
 
     # Find and expand generate-for loops
     for m in _RE_GENFOR.finditer(body):

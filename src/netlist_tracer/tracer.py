@@ -7,6 +7,7 @@ from collections import deque
 from dataclasses import dataclass
 from typing import Any, Optional, cast
 
+from netlist_tracer.model import Instance
 from netlist_tracer.parser import NetlistParser
 
 ################################################################################
@@ -348,31 +349,48 @@ class BidirectionalTracer:
         seeds: list[tuple[str, tuple[tuple[str, str], ...]]] = []
         for start_cell, start_inst_chain in start_matches:
             subckt = self.parser.subckts.get(start_cell)
-            if not subckt or start_pin not in subckt.pin_to_pos:
-                print(f"ERROR: Pin '{start_pin}' not found in cell '{start_cell}'", file=sys.stderr)
-                if subckt:
-                    # NOTE: trace_pins() expands bare bus names via
-                    # expand_pin() before reaching this point. This branch
-                    # only fires when trace() is called directly (library
-                    # API) with a bus-base name. In that case, suggest the
-                    # actual indexed members rather than echoing the base.
-                    bus_members = [
-                        p
-                        for p in subckt.pins
-                        if p != start_pin
-                        and re.search(r"(?:\[\d+\]|<\d+>)$", p)
-                        and _BUS_BRKT_RE.sub("", p) == start_pin
-                    ]
-                    if bus_members:
-                        print(f"Did you mean: {bus_members[:10]}")
+            if not subckt:
+                print(f"ERROR: Cell '{start_cell}' not found", file=sys.stderr)
+                continue
+
+            # Check if start_pin is a pin (normal case)
+            is_pin = start_pin in subckt.pin_to_pos
+
+            # Check if start_pin is an internal net (if not a pin)
+            is_internal_net = False
+            if not is_pin:
+                # Look for the net in this cell's instances
+                insts = self.parser.instances_by_parent.get(start_cell, [])
+                for inst in insts:
+                    if start_pin in inst.nets:
+                        is_internal_net = True
+                        break
+
+            if not is_pin and not is_internal_net:
+                print(f"ERROR: Net '{start_pin}' not found in cell '{start_cell}'", file=sys.stderr)
+                # Suggest similar pins or nets
+                insts = self.parser.instances_by_parent.get(start_cell, [])
+                all_nets = set(subckt.pins)
+                for inst in insts:
+                    all_nets.update(inst.nets)
+
+                bus_members = [
+                    p
+                    for p in subckt.pins
+                    if p != start_pin
+                    and re.search(r"(?:\[\d+\]|<\d+>)$", p)
+                    and _BUS_BRKT_RE.sub("", p) == start_pin
+                ]
+                if bus_members:
+                    print(f"Did you mean: {bus_members[:10]}")
+                else:
+                    suggestions = suggest_pins(start_pin, list(all_nets))
+                    if suggestions:
+                        print(f"Did you mean: {suggestions[:10]}")
                     else:
-                        suggestions = suggest_pins(start_pin, subckt.pins)
-                        if suggestions:
-                            print(f"Did you mean: {suggestions[:10]}")
-                        else:
-                            print(
-                                f"Available pins ({len(subckt.pins)} total): {subckt.pins[:10]}..."
-                            )
+                        print(
+                            f"Available signals ({len(all_nets)} total): {sorted(list(all_nets))[:10]}..."
+                        )
                 continue
             if start_inst_chain is None:
                 chains = self._enumerate_ancestor_chains(start_cell)
@@ -428,6 +446,62 @@ class BidirectionalTracer:
             and _RE_BUS_INDEXED.search(p)
             and _BUS_BRKT_RE.sub("", p) == name
         ]
+
+    def expand_bus_base(self, subckt: Any, insts: list[Instance], name: str) -> list[str]:
+        """Expand a signal name to its bit-level members (pins or internal nets).
+
+        - If `name` exists exactly in subckt.pin_to_pos: returns [name].
+        - If `name` is a bare bus base of pins: returns all indexed pin members.
+        - If `name` appears in any instance net list: returns [name] (internal net).
+        - If `name` is a bare bus base of internal nets: returns all indexed net members.
+        - Otherwise: returns [] (unknown signal).
+
+        Inputs:
+            subckt: SubcktDef instance
+            insts: list of Instance objects in this subckt
+            name: Signal name to expand
+
+        Outputs:
+            List of concrete signal names after expansion
+        """
+        # Check if exact pin match
+        if name in subckt.pin_to_pos:
+            return [name]
+
+        # Check if bare bus base of pins
+        pin_matches = [
+            p
+            for p in subckt.pins
+            if p != name
+            and _RE_BUS_INDEXED.search(p)
+            and _BUS_BRKT_RE.sub("", p) == name
+        ]
+        if pin_matches:
+            return pin_matches
+
+        # Check if exact internal net match
+        for inst in insts:
+            if name in inst.nets:
+                return [name]
+
+        # Check if bare bus base of internal nets
+        net_bases = {
+            _BUS_BRKT_RE.sub("", net)
+            for inst in insts
+            for net in inst.nets
+            if _RE_BUS_INDEXED.search(net)
+        }
+
+        if name in net_bases:
+            net_matches = [
+                net
+                for inst in insts
+                for net in inst.nets
+                if _BUS_BRKT_RE.sub("", net) == name
+            ]
+            return list(dict.fromkeys(net_matches))  # Dedupe while preserving order
+
+        return []
 
     def _bfs_from_seed(
         self,
@@ -736,68 +810,65 @@ class BidirectionalTracer:
 
     def trace_net(
         self,
-        net_name: str,
-        cell_filter: Optional[str] = None,
+        nets: Optional[list[str]] = None,
+        cell_name: str = "",
         target_name: Optional[str] = None,
         max_depth: Optional[int] = None,
     ) -> dict[str, list[list[TraceStep]]]:
         """
-        Trace paths starting from a NET (not a pin).
+        Unified trace entry point for pins, internal nets, and bus bases.
 
-        Finds all (subckt, net) pairs where net_name appears on any instance
-        terminal in that subckt; seeds the existing BFS with each match;
-        returns a dict keyed by `<subckt_name>:<net_name>` to disambiguate when
-        the same net name exists in multiple subckts.
+        Accepts a list of signal names (pins, internal nets, or bus bases) in a
+        required cell. Expands bus bases to their concrete bit-level members,
+        resolves to cell pins or internal nets, and traces each.
+
+        Returns a dictionary mapping signal name -> paths. In omit-mode (nets=None),
+        traces all bit-level pins in the cell.
 
         Inputs:
-            net_name: The net to start from
-            cell_filter: Optional subckt name; restricts search to that one subckt
+            nets: Optional list of signal names to trace (None for omit-mode)
+            cell_name: Required cell/subckt name
             target_name: Optional target cell/instance
             max_depth: Optional path depth cap
 
         Outputs:
-            dict mapping `<subckt>:<net>` -> list of TraceStep paths; empty dict
-            if net not found anywhere
+            dict mapping signal_name -> list of TraceStep paths
         """
+        # Resolve cell_name to cell type
+        cell_matches = self.resolve_name(cell_name)
+        if not cell_matches:
+            print(f"ERROR: '{cell_name}' not found as cell type or instance name", file=sys.stderr)
+            return {}
+
+        start_cell = cell_matches[0][0]
+        subckt = self.parser.subckts.get(start_cell)
+        if not subckt:
+            print(f"ERROR: Cell '{start_cell}' has no subcircuit definition", file=sys.stderr)
+            return {}
+
+        # Get instances for this cell (for internal net lookup)
+        insts = self.parser.instances_by_parent.get(start_cell, [])
+
+        # Determine nets to trace
+        if nets is None:
+            # Omit-mode: trace all bit-level pins
+            names_to_trace = list(subckt.pin_to_pos.keys())
+        else:
+            # Expand all provided names (pins, internal nets, or bus bases)
+            names_to_trace = []
+            for name in nets:
+                expanded = self.expand_bus_base(subckt, insts, name)
+                if expanded:
+                    names_to_trace.extend(expanded)
+                else:
+                    # Unknown name: pass through and let trace() report error
+                    names_to_trace.append(name)
+
+        # Trace each name
         results: dict[str, list[list[TraceStep]]] = {}
-
-        # Enumerate subckts to search
-        subckts_to_search = (
-            [cell_filter] if cell_filter else list(self.parser.subckts.keys())
-        )
-
-        for sbckt_nm in subckts_to_search:
-            if sbckt_nm not in self.parser.subckts:
-                continue
-
-            # Look for net_name in instances of this subckt
-            insts = self.parser.instances_by_parent.get(sbckt_nm, [])
-            found = False
-            for inst in insts:
-                if net_name not in inst.nets:
-                    continue
-
-                # Found the net; seed the trace from this (subckt, net) pair
-                found = True
-                break
-
-            if not found:
-                continue
-
-            # Use the shared BFS helper seeded from the net (not a pin)
-            # initial_stack is empty; initial_inst_name is None (net-mode doesn't start from a specific instance)
-            all_paths = self._bfs_from_seed(
-                sbckt_nm,
-                net_name,
-                target_name=target_name,
-                max_depth=max_depth,
-                initial_stack=(),
-                initial_inst_name=None,
-            )
-
-            # Store results keyed by <subckt>:<net>
-            key = f"{sbckt_nm}:{net_name}"
-            results[key] = all_paths
+        for name in names_to_trace:
+            paths = self.trace(cell_name, name, target_name, max_depth)
+            results[name] = paths
 
         return results
 

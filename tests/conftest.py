@@ -54,6 +54,12 @@ def synthetic_cdl_basic_cdl(fixtures_synthetic_dir):
 
 
 @pytest.fixture
+def synthetic_cdl_internal_nets_cdl(fixtures_synthetic_dir):
+    """Path to synthetic cdl_internal_nets.cdl fixture with internal nets."""
+    return os.path.join(fixtures_synthetic_dir, "cdl_internal_nets.cdl")
+
+
+@pytest.fixture
 def synthetic_spectre_basic_scs(fixtures_synthetic_dir):
     """Path to synthetic spectre_basic.scs fixture."""
     return os.path.join(fixtures_synthetic_dir, "spectre_basic.scs")
@@ -93,6 +99,12 @@ def synthetic_verilog_defparam_v(fixtures_synthetic_dir):
 def synthetic_udp_simple_v(fixtures_synthetic_dir):
     """Path to synthetic udp_simple.v fixture (Verilog UDP definitions and usage)."""
     return os.path.join(fixtures_synthetic_dir, "udp_simple.v")
+
+
+@pytest.fixture
+def synthetic_genvar_for_label_v(fixtures_synthetic_dir):
+    """Path to synthetic genvar_for_label.v fixture (generate-for with block label)."""
+    return os.path.join(fixtures_synthetic_dir, "genvar_for_label.v")
 
 
 @pytest.fixture

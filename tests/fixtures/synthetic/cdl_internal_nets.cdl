@@ -1,0 +1,13 @@
+* CDL with internal nets (nets that appear in instance connections)
+.SUBCKT child_module inp VSS VDD out
+M1 out inp VDD VDD pmos W=2u L=1u
+M2 out inp VSS VSS nmos W=1u L=1u
+.ENDS child_module
+
+.SUBCKT parent_cell external_a external_b VSS VDD external_out
+* Multi-line instance: internal_sig is a net that exists only in this subckt body
+X_child1 external_a VSS VDD internal_sig
++ child_module
+X_child2 internal_sig VSS VDD external_out
++ child_module
+.ENDS parent_cell

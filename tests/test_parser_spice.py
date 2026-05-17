@@ -949,3 +949,17 @@ class TestSpicePeek:
         assert pns_upper is not None
         # Should find the same pins (in same order since both hit the same line)
         assert pns_lower == pns_upper
+
+    def test_peek_nets_internal_in_continuation(self, synthetic_cdl_internal_nets_cdl):
+        """Test peek_nets extracts internal nets from continuation lines."""
+        # parent_cell has internal nets in multi-line instances
+        nets = NetlistParser.peek_nets(synthetic_cdl_internal_nets_cdl, "parent_cell")
+        assert nets is not None
+        assert "internal_sig" in nets
+        # internal_sig appears as a connection in the multi-line instance declaration
+        # (it's internal because it's not a pin of parent_cell)
+
+    def test_peek_nets_not_found(self, synthetic_cdl_internal_nets_cdl):
+        """Test peek_nets returns None for non-existent cell."""
+        nets = NetlistParser.peek_nets(synthetic_cdl_internal_nets_cdl, "NONEXISTENT")
+        assert nets is None
