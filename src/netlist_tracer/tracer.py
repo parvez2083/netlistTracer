@@ -140,6 +140,27 @@ class BidirectionalTracer:
         self.parser = parser
         self._equiv_cache: dict[str, dict[str, list[str]]] = {}
 
+    def _mtrl_if_pndg(self, cell_nm: str) -> bool:
+        """Check if cell_name has pending SPF; if so, materialize it.
+
+        Used at descent points in the BFS to trigger lazy materialization
+        when needed.
+
+        Inputs:
+            cell_nm: Cell type the BFS is about to descend into
+
+        Outputs:
+            bool — True if materialization occurred (caller may need to refresh
+            child_subckt reference)
+        """
+        # Check if this cell is a pending placeholder
+        if cell_nm not in self.parser.pndg_spf_fls:
+            return False
+
+        spf_pth = self.parser.pndg_spf_fls[cell_nm]
+        cnt = self.parser.mtrl_spf(spf_pth)
+        return cnt > 0
+
     def _equivalence_class(self, cell: str, net: str) -> list[str]:
         """Return all nets equivalent to `net` in `cell` via aliases."""
         sub = self.parser.subckts.get(cell)
@@ -508,10 +529,16 @@ class BidirectionalTracer:
                 )
                 queue.append((curr_cell, equiv_net, inst_stack, path + [alias_step]))
 
+            # Lazy SPF: materialize pending curr_cell so instances_by_parent is fresh
+            self._mtrl_if_pndg(curr_cell)
+
             for inst in self.parser.instances_by_parent.get(curr_cell, []):
                 if curr_net not in inst.nets:
                     continue
                 net_pos = inst.nets.index(curr_net)
+
+                # Lazy SPF: materialize child before lookup
+                self._mtrl_if_pndg(inst.cell_type)
                 child_subckt = self.parser.subckts.get(inst.cell_type)
 
                 # Hierarchical descent: if child_subckt exists, has a body, and pin index is valid
@@ -593,6 +620,8 @@ class BidirectionalTracer:
             if subckt and curr_net in subckt.pin_to_pos and inst_stack:
                 pin_pos = subckt.pin_to_pos[curr_net]
                 inst_name, parent_cell = inst_stack[-1]
+                # Lazy SPF: materialize parent cell so it's accessible for walk-up
+                self._mtrl_if_pndg(parent_cell)
                 instances = [
                     i
                     for i in self.parser.instances_by_celltype.get(curr_cell, [])
@@ -755,12 +784,11 @@ class BidirectionalTracer:
         return results
 
 
-def format_path(path: list[TraceStep], spef_ovly: Any | None = None) -> str:
+def format_path(path: list[TraceStep]) -> str:
     """Format a trace path as a single line.
 
     Args:
         path: List of TraceStep objects representing a path.
-        spef_ovly: Optional SpefOverlay for annotating steps with capacitance/resistance.
 
     Returns:
         Formatted path string.
@@ -801,17 +829,6 @@ def format_path(path: list[TraceStep], spef_ovly: Any | None = None) -> str:
                 inst = "/".join(s[0] for s in rel)
 
         step_str = f"{step.cell}|{inst}|{step.pin_or_net}"
-
-        # Annotate with SPEF metadata if overlay provided
-        if spef_ovly is not None and hasattr(spef_ovly, "lookup"):
-            ovl_data = spef_ovly.lookup(step.pin_or_net)
-            if ovl_data:
-                cap_pf = ovl_data["C"] * 1e15  # Convert farads to fF
-                if ovl_data["R"] is not None:
-                    res_ohm = ovl_data["R"]
-                    step_str += f" <C={cap_pf:.3g}fF, R={res_ohm:.3g}ohm>"
-                else:
-                    step_str += f" <C={cap_pf:.3g}fF>"
 
         parts.append(step_str)
     return " -- ".join(parts)

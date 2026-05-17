@@ -443,6 +443,9 @@ class TestSPFIncludeDispatch:
                 "dispatch per-file to the correct parser."
             )
 
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
+
             spfsub = parser.subckts["SPFSUB"]
             # SPF body with series resistors creates merged R instances via R-merging
             # If SPF was correctly parsed, instances should be present
@@ -503,6 +506,9 @@ class TestBackslashContinuationInDspfInclude:
                 "If this fails, the regex failed to match the split line."
             )
 
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
+
             # Verify it has instances (evidence of SPF parsing)
             cont_insts = parser.instances_by_parent.get("CONT_SPF", [])
             assert len(cont_insts) > 0, (
@@ -543,6 +549,8 @@ class TestBackslashContinuationInDspfInclude:
             assert "COMPLEX_SPF" in parser.subckts, (
                 "COMPLEX_SPF should be recognized despite multiple backslash continuations"
             )
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
             # Verify SPF body was merged
             complex_insts = parser.instances_by_parent.get("COMPLEX_SPF", [])
             assert len(complex_insts) > 0, "COMPLEX_SPF should have parsed instances"
@@ -611,6 +619,9 @@ class TestSectionAwareDspfInclude:
             assert "INV_CELL" in parser.subckts, (
                 "INV_CELL should be defined from the rcworst_CCworst section's dspf_include"
             )
+
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
 
             # Verify it has instances
             inv_insts = parser.instances_by_parent.get("INV_CELL", [])
@@ -682,6 +693,9 @@ class TestSectionAwareDspfInclude:
             assert "CELLB" in parser.subckts, (
                 "CELLB (inside section in child) should also be loaded without section filter"
             )
+
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
 
             # Verify both have instances
             assert len(parser.instances_by_parent.get("CELLA", [])) > 0
@@ -770,6 +784,9 @@ class TestSectionAwareDspfInclude:
                 "CELL_C from child_c.scs should be loaded (BUG #2 fix: was missing)"
             )
 
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
+
             # Verify each has instances (from SPF bodies)
             assert len(parser.instances_by_parent.get("CELL_A", [])) > 0, (
                 "CELL_A should have instances from SPF"
@@ -821,6 +838,9 @@ class TestSectionAwareDspfInclude:
             assert "my_cell" in parser.subckts, (
                 "my_cell should be defined in the parsed .scs file"
             )
+
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
 
             # Verify that instances from the dspf_include were loaded
             my_cell_insts = parser.instances_by_parent.get("my_cell", [])
@@ -875,6 +895,9 @@ class TestSectionAwareDspfInclude:
                 "DSPF_GZ_CELL should be loaded from .dspf.gz dspf_include. "
                 "If this fails, the extension check is not matching .dspf.gz files."
             )
+
+            # Materialize pending SPF files for this test
+            parser.mtrl_all_pndg()
 
             # Verify it has instances from the SPF body
             dspf_gz_insts = parser.instances_by_parent.get("DSPF_GZ_CELL", [])

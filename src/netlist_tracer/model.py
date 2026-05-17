@@ -18,6 +18,12 @@ class SubcktDef:
     aliases: dict[str, str] = field(default_factory=dict)
     # Arbitrary metadata attached by format-specific parsers (SPF caps, ground nets, pin aliases, etc.)
     params: dict = field(default_factory=dict)
+    # Lazy SPF parsing: True when SubcktDef was registered from a peek-only scan;
+    # pins populated but body (instances/aliases) deferred. Runtime-only, NOT serialized.
+    is_placeholder: bool = False
+    # Path to SPF file that will populate body on materialization. None when not a placeholder.
+    # Runtime-only, NOT serialized.
+    placeholder_source: str | None = None
 
     def __post_init__(self) -> None:
         self.pin_to_pos = {pin: i for i, pin in enumerate(self.pins)}

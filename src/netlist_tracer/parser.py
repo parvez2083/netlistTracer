@@ -113,6 +113,9 @@ class NetlistParser:
         self.global_nets: list[str] = []
         self._user_format = format
         self._bus_order = bus_order
+        # Lazy SPF parsing: map cell_name -> spf_path for placeholders; set of materialized paths
+        self.pndg_spf_fls: dict[str, str] = {}
+        self.mtrl_spf_fls: set[str] = set()
 
         # JSON cache: load pre-parsed data directly
         if os.path.isfile(filename) and filename.endswith(".json"):
@@ -450,11 +453,13 @@ class NetlistParser:
                 for inst in insts:
                     self._add_instance(inst)
             elif self.format == "spectre":
-                sbckts, insts, gbl_nets = self._dispatch_single_format("spectre", self.files)
+                sbckts, insts, spf_pths = self._dispatch_single_format("spectre", self.files)
                 self.subckts = sbckts
-                self.global_nets = gbl_nets
                 for inst in insts:
                     self._add_instance(inst)
+                # Lazy SPF parsing: register placeholders instead of eager-parsing
+                if spf_pths:
+                    self._register_spf_plchldr(spf_pths)
             elif self.format == "spf":
                 sbckts, insts, gbl_nets = self._dispatch_single_format("spf", self.files)
                 self.subckts = sbckts
@@ -474,6 +479,131 @@ class NetlistParser:
         self.instances_by_parent[instance.parent_cell].append(instance)
         self.instances_by_celltype[instance.cell_type].append(instance)
         self.instances_by_name[instance.name].append(instance)
+
+    ################################################################################
+    # SECTION: Lazy SPF Parsing
+    # Description: Placeholder registration, on-demand materialization, and eager flush
+    ################################################################################
+
+    def _register_spf_plchldr(self, spf_pths: list[str]) -> None:
+        """Register SPF cells as placeholders without parsing bodies.
+
+        For each SPF path, peek-scan its .SUBCKT declarations and register
+        placeholder SubcktDefs (pins populated from peek, body empty,
+        is_placeholder=True, placeholder_source=spf_path). Map cell_name
+        to spf_path in self.pndg_spf_fls so the tracer can materialize
+        on demand.
+
+        Non-empty-wins integration: if a cell already exists in self.subckts
+        with a non-empty body, skip placeholder registration (existing
+        definition wins). If existing entry is empty (Spectre shell),
+        register placeholder over it; materialization will trigger the
+        back-annotation merge.
+
+        Inputs:
+            spf_pths: List of resolved absolute SPF paths
+
+        Outputs:
+            None — mutates self.subckts, self.pndg_spf_fls, and instance indices
+        """
+        from netlist_tracer.parsers.peek import peek_spf_subckts
+
+        for spf_pth in spf_pths:
+            try:
+                sbckts_in_fl = peek_spf_subckts(spf_pth)
+            except Exception as e:
+                _logger.warning(f"peek failed for {spf_pth}: {e}; skipping placeholder")
+                continue
+
+            for cell_nm, pn_lst in sbckts_in_fl:
+                # Non-empty-wins: skip if a populated definition already exists
+                existing = self.subckts.get(cell_nm)
+                if existing and (existing.aliases or self.instances_by_parent.get(cell_nm)):
+                    continue
+
+                # Register placeholder (or overwrite empty shell)
+                plchldr = SubcktDef(
+                    name=cell_nm,
+                    pins=pn_lst,
+                    aliases={},
+                    is_placeholder=True,
+                    placeholder_source=spf_pth,
+                )
+                self.subckts[cell_nm] = plchldr
+                self.pndg_spf_fls[cell_nm] = spf_pth
+
+    def mtrl_spf(self, spf_pth: str) -> int:
+        """Full-parse one SPF file and merge into self. Idempotent on path.
+
+        Inputs:
+            spf_pth: Absolute SPF path to materialize
+
+        Outputs:
+            int — number of subckts materialized (0 if already materialized)
+        """
+        # Idempotent: check if already materialized
+        if spf_pth in self.mtrl_spf_fls:
+            return 0
+
+        try:
+            sbckts_spf, insts_spf, _ = parse_spf(spf_pth, include_paths=self.include_paths)
+        except Exception as e:
+            _logger.warning(f"Failed to parse SPF '{spf_pth}': {type(e).__name__}: {e}")
+            return 0
+
+        # Merge subckts: non-empty-wins (placeholder replaced by populated body)
+        cnt = 0
+        for sbckt_nm, sbckt_spf in sbckts_spf.items():
+            if sbckt_nm not in self.subckts:
+                # New subckt
+                self.subckts[sbckt_nm] = sbckt_spf
+                cnt += 1
+            else:
+                # Collision: check if existing is empty (Spectre shell)
+                has_inst = any(i.parent_cell == sbckt_nm for i in self.instances_by_parent.get(sbckt_nm, []))
+                if not has_inst:
+                    # Empty: replace with populated SPF body
+                    _logger.info(f"Back-annotating '{sbckt_nm}': empty shell -> populated SPF body")
+                    self.subckts[sbckt_nm] = sbckt_spf
+                    cnt += 1
+
+        # Merge instances: append to all indices
+        for inst in insts_spf:
+            self._add_instance(inst)
+
+        # Cleanup: remove cell_names from pending if their placeholder_source is this file
+        for sbckt_nm in list(self.pndg_spf_fls.keys()):
+            if self.pndg_spf_fls[sbckt_nm] == spf_pth:
+                del self.pndg_spf_fls[sbckt_nm]
+
+        # Mark as materialized
+        self.mtrl_spf_fls.add(spf_pth)
+        _logger.info(f"Materialized SPF: {spf_pth} ({cnt} subckts)")
+        return cnt
+
+    def mtrl_all_pndg(self) -> int:
+        """Flush all pending SPF files. Returns total subckts materialized.
+
+        Inputs:
+            (none)
+
+        Outputs:
+            int — total subckts materialized across all files
+        """
+        # Guard: if fields don't exist (e.g., synthetic parser), no pending
+        if not hasattr(self, 'pndg_spf_fls'):
+            return 0
+
+        ttl = 0
+        pndg_cpy = dict(self.pndg_spf_fls)
+        for _, spf_pth in pndg_cpy.items():
+            # Deduplicate: each unique path is materialized once
+            if spf_pth not in self.mtrl_spf_fls:
+                cnt = self.mtrl_spf(spf_pth)
+                ttl += cnt
+        if ttl > 0:
+            _logger.info(f"Materialized {ttl} subckts from pending SPF files")
+        return ttl
 
     def _load_json(self, filepath: str) -> None:
         """Load pre-parsed netlist data from JSON cache.
@@ -569,10 +699,10 @@ class NetlistParser:
             filepath: Path to Spectre file
 
         Returns:
-            Tuple of (subckts dict, instances list, empty global_nets list)
+            Tuple of (subckts dict, instances list, spf_paths list for lazy registration)
         """
-        subckts, instances = parse_spectre(filepath, include_paths=self.include_paths)
-        return subckts, instances, []
+        subckts, instances, spf_paths = parse_spectre(filepath, include_paths=self.include_paths)
+        return subckts, instances, spf_paths
 
     def _parse_spf(self, filepath: str) -> tuple[dict[str, SubcktDef], list[Instance], list[str]]:
         """Parse SPF netlist and return results without mutation.
@@ -683,6 +813,9 @@ class NetlistParser:
         Args:
             out_path: Output file path.
         """
+        # Eager-flush all pending SPF files to ensure complete state in cache
+        self.mtrl_all_pndg()
+
         subckts_out = {name: sub.pins for name, sub in self.subckts.items()}
         instances_out = [
             {

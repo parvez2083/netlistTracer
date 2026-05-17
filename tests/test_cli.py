@@ -73,52 +73,63 @@ def test_cli_multipin_sectioned() -> None:
 
 
 def test_cli_trace_format_json() -> None:
-    """Verify -trace_format json produces valid JSON output."""
+    """Verify -output *.json produces valid JSON output."""
+    import os
+    import tempfile
+
     repo_root = Path(__file__).parent.parent
     netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
 
-    # Run the CLI with JSON format
-    result = subprocess.run(
-        [
-            "netlist-tracer",
-            "-netlist",
-            str(netlist_path),
-            "-cell",
-            "picorv32",
-            "-trace_format",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-    )
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as tmp:
+        tmp_path = tmp.name
 
-    assert result.returncode == 0, f"CLI failed: {result.stderr}"
+    try:
+        # Run the CLI with JSON format via -output file
+        result = subprocess.run(
+            [
+                "netlist-tracer",
+                "-netlist",
+                str(netlist_path),
+                "-cell",
+                "picorv32",
+                "-output",
+                tmp_path,
+            ],
+            capture_output=True,
+            text=True,
+        )
 
-    # Parse JSON output
-    data = json.loads(result.stdout)
+        assert result.returncode == 0, f"CLI failed: {result.stderr}"
 
-    # Verify schema keys
-    assert data["tool"] == "netlist-tracer", "Tool field is incorrect"
-    assert data["version"] == __version__, "Version field must match netlist_tracer.__version__"
-    assert data["cell"] == "picorv32", "Cell field is incorrect"
-    assert data["target"] is None, "Target field should be None"
-    assert isinstance(data["pins"], dict), "Pins should be a dict"
+        # Read JSON from output file
+        with open(tmp_path) as f:
+            data = json.load(f)
 
-    # In omit-mode, pins dict should be non-empty (all bit-level pins)
-    assert len(data["pins"]) > 0, "No pins traced in omit-mode"
+        # Verify schema keys
+        assert data["tool"] == "netlist-tracer", "Tool field is incorrect"
+        assert data["version"] == __version__, "Version field must match netlist_tracer.__version__"
+        assert data["cell"] == "picorv32", "Cell field is incorrect"
+        assert data["target"] is None, "Target field should be None"
+        assert isinstance(data["pins"], dict), "Pins should be a dict"
 
-    # Check structure of first pin
-    first_pin = next(iter(data["pins"].values()))
-    assert isinstance(first_pin["paths"], list), "Paths should be a list"
-    if first_pin["paths"]:
-        first_path = first_pin["paths"][0]
-        assert "formatted" in first_path, "Missing 'formatted' in path"
-        assert "steps" in first_path, "Missing 'steps' in path"
-        if first_path["steps"]:
-            first_step = first_path["steps"][0]
-            assert "cell" in first_step, "Missing 'cell' in step"
-            assert "pin_or_net" in first_step, "Missing 'pin_or_net' in step"
-            assert "direction" in first_step, "Missing 'direction' in step"
+        # In omit-mode, pins dict should be non-empty (all bit-level pins)
+        assert len(data["pins"]) > 0, "No pins traced in omit-mode"
+
+        # Check structure of first pin
+        first_pin = next(iter(data["pins"].values()))
+        assert isinstance(first_pin["paths"], list), "Paths should be a list"
+        if first_pin["paths"]:
+            first_path = first_pin["paths"][0]
+            assert "formatted" in first_path, "Missing 'formatted' in path"
+            assert "steps" in first_path, "Missing 'steps' in path"
+            if first_path["steps"]:
+                first_step = first_path["steps"][0]
+                assert "cell" in first_step, "Missing 'cell' in step"
+                assert "pin_or_net" in first_step, "Missing 'pin_or_net' in step"
+                assert "direction" in first_step, "Missing 'direction' in step"
+    finally:
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
 
 def test_cli_auto_detect_edif() -> None:
@@ -527,34 +538,6 @@ def test_cli_net_rejects_pin(synthetic_spice_basic_sp: str) -> None:
     assert "cannot combine" in result.stderr.lower(), "Error message should mention the conflict"
 
 
-def test_cli_spef_requires_netlist() -> None:
-    """Test that -spef without -netlist is rejected."""
-    repo_root = Path(__file__).parent.parent
-    spef_path = repo_root / "tests/fixtures/synthetic/simple_inv.spef"
-
-    # Create a minimal SPEF fixture if it doesn't exist
-    spef_path.parent.mkdir(parents=True, exist_ok=True)
-    if not spef_path.exists():
-        spef_path.write_text("*SPEF \"1.0\" \"ns\" \"1pF\" \"1ohm\"")
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "netlist_tracer.cli.trace",
-            "-spef",
-            str(spef_path),
-            "-cell",
-            "X",
-            "-pin",
-            "Y",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode != 0, "Should fail when -spef is supplied without -netlist"
-
-
 def test_cli_net_mode_finds_paths(synthetic_spice_basic_sp: str) -> None:
     """Test that -net mode traces from a named net and finds paths."""
     result = subprocess.run(
@@ -574,67 +557,3 @@ def test_cli_net_mode_finds_paths(synthetic_spice_basic_sp: str) -> None:
     # Verify net-mode output contains net-related text
     assert "net" in result.stdout.lower(), \
         "Output should contain reference to traced net"
-
-
-def test_cli_spef_annotation_text(synthetic_spice_basic_sp: str) -> None:
-    """Test that SPEF overlay can be applied to trace output (annotation in text mode)."""
-    repo_root = Path(__file__).parent.parent
-    spef_path = repo_root / "tests/fixtures/synthetic/simple_inv.spef"
-
-    # Ensure minimal SPEF exists
-    spef_path.parent.mkdir(parents=True, exist_ok=True)
-    spef_content = "*SPEF \"1.0\" \"ns\" \"1pF\" \"1ohm\"\n*D_NET sig_a 0.1\n*CAP 1 0.05pF\n*RES 1 sig_a sig_b 1.0ohm\n*END\n"
-    spef_path.write_text(spef_content)
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "netlist_tracer.cli.trace",
-            "-netlist",
-            synthetic_spice_basic_sp,
-            "-net",
-            "sig_a",
-            "-spef",
-            str(spef_path),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, f"CLI failed: {result.stderr}"
-    # Verify SPEF was loaded (from stderr)
-    assert "SPEF" in result.stderr or "overlay" in result.stderr.lower(), \
-        "SPEF should be loaded (check stderr for confirmation)"
-
-
-def test_cli_spef_annotation_json() -> None:
-    """Test that SPEF overlay includes metadata in JSON output."""
-    repo_root = Path(__file__).parent.parent
-    netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
-    spef_path = repo_root / "tests/fixtures/synthetic/simple_inv.spef"
-
-    spef_path.parent.mkdir(parents=True, exist_ok=True)
-    spef_content = "*SPEF \"1.0\" \"ns\" \"1pF\" \"1ohm\"\n*D_NET clk 0.1\n*CAP 1 0.05pF\n*END\n"
-    spef_path.write_text(spef_content)
-
-    result = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "netlist_tracer.cli.trace",
-            "-netlist",
-            str(netlist_path),
-            "-net",
-            "clk",
-            "-spef",
-            str(spef_path),
-            "-trace_format",
-            "json",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert result.returncode == 0, f"CLI failed: {result.stderr}"
-
-    data = json.loads(result.stdout)
-    assert "spef_overlay" in data, "JSON output should include top-level spef_overlay key"

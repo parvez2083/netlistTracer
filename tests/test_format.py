@@ -185,8 +185,6 @@ class TestFormatOverride:
                         sp_path,
                         "-output",
                         out_path,
-                        "-format",
-                        "spice",
                     ],
                 ):
                     result = main()

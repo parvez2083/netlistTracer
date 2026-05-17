@@ -389,3 +389,71 @@ def _peek_edf(flpth: str, cell: str) -> list[str] | None:
     except Exception as e:
         _logger.debug(f"EDIF peek failed for {cell}: {e}")
         return None
+
+
+def peek_spf_subckts(spf_pth: str) -> list[tuple[str, list[str]]]:
+    """Cheap scan of an SPF/DSPF file to discover all cell definitions.
+
+    Read only enough to find every `.SUBCKT <name> <pins...>` declaration.
+    No series-R reduction, no instance parsing, no body capture. Handles
+    .gz transparently.
+
+    Inputs:
+        spf_pth: Absolute path to .spf, .spef, .dspf file (optional .gz suffix)
+
+    Outputs:
+        List of (cell_name, [pin1, pin2, ...]) tuples. One per .SUBCKT declaration.
+        Empty list on parse error.
+    """
+    try:
+        # Open via gzip if .gz, else regular open with error handling
+        if spf_pth.endswith(".gz"):
+            fh = gzip.open(spf_pth, "rt", errors="replace")
+        else:
+            fh = open(spf_pth, encoding="utf-8", errors="replace")
+
+        try:
+            rslts = []
+            for ln in fh:
+                ln = ln.rstrip()
+
+                # Look for .SUBCKT line (case-insensitive)
+                m = re.match(
+                    r"^\s*\.SUBCKT\s+(\S+)\s+(.*)",
+                    ln,
+                    re.IGNORECASE,
+                )
+                if not m:
+                    continue
+
+                sbckt_nm = m.group(1)
+                pns = []
+                rst_ln = m.group(2).strip()
+
+                # Collect tokens from the rest of this line
+                tks = rst_ln.split()
+                for tk in tks:
+                    # Skip params (contain '=')
+                    if "=" not in tk:
+                        pns.append(tk)
+
+                # Peek next lines for '+' continuations
+                for cn_ln in fh:
+                    cn_ln = cn_ln.rstrip()
+                    if not cn_ln.lstrip().startswith("+"):
+                        break
+                    # Remove the '+' and split
+                    cn_rst = cn_ln.lstrip()[1:].strip()
+                    cn_tks = cn_rst.split()
+                    for tk in cn_tks:
+                        if "=" not in tk:
+                            pns.append(tk)
+
+                rslts.append((sbckt_nm, pns if pns else []))
+
+            return rslts
+        finally:
+            fh.close()
+    except Exception as e:
+        _logger.debug(f"SPF peek failed for {spf_pth}: {e}")
+        return []

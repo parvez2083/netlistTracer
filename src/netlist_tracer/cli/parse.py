@@ -21,19 +21,13 @@ def main() -> int:
     parser.add_argument("-netlist", required=True, help="Path to netlist file or directory")
     parser.add_argument("-output", required=True, help="Output JSON file path")
     parser.add_argument("-defines", default=None, help="Comma-separated preprocessor defines")
-    parser.add_argument("-top", default=None, help="Top-level cell name (optional)")
+    parser.add_argument("-topcell", default=None, help="Top-level cell name (optional)")
     parser.add_argument(
         "-include",
         dest="include_path",
         action="append",
         default=None,
         help="Additional directory to search for include files (repeatable)",
-    )
-    parser.add_argument(
-        "-format",
-        choices=["auto", "spice", "cdl", "spectre", "verilog", "edif"],
-        default="auto",
-        help="Override format auto-detection. Default: auto (content-based detection).",
     )
     args = parser.parse_args()
 
@@ -44,13 +38,12 @@ def main() -> int:
         return 1
 
     try:
-        fmt = None if args.format == "auto" else args.format
         nl_parser = NetlistParser(
             args.netlist,
             defines=user_defines,
-            top=args.top,
+            top=args.topcell,
             include_paths=args.include_path,
-            format=fmt,
+            format=None,
         )
     except NetlistParseError as e:
         print(f"ERROR: {e}", file=sys.stderr)
