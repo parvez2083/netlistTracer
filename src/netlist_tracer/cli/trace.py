@@ -19,6 +19,52 @@ from netlist_tracer.tracer import BidirectionalTracer, TraceStep, format_path
 _logger = get_logger(__name__)
 
 
+def _parse_plus_args(argv: list[str]) -> tuple[list[str], list[str], list[str]]:
+    """
+    Extract +define+ and +incdir+ tokens from argv.
+
+    Parses Verilog tool-style flags:
+    - +define+MACRO[=VAL] → macro name (value part dropped if present; logged as debug)
+    - +incdir+/path → include path
+
+    Multiple instances accumulate.
+
+    Inputs:
+        argv: Command-line argument list (typically sys.argv[1:])
+
+    Outputs:
+        Tuple of (filtered_argv, defines, incdirs) where:
+          - filtered_argv has the +-prefix tokens removed
+          - defines is the list of macro names from +define+ tokens
+          - incdirs is the list of include paths from +incdir+ tokens
+    """
+    defines: list[str] = []
+    incdirs: list[str] = []
+    filtered: list[str] = []
+
+    for arg in argv:
+        if arg.startswith("+define+"):
+            # Extract macro name; drop any =VAL part
+            dfn_part = arg[8:]  # Strip "+define+"
+            if "=" in dfn_part:
+                macro_nm = dfn_part.split("=")[0]
+                val_part = dfn_part.split("=", 1)[1]
+                _logger.debug(f"Macro {macro_nm} has value {val_part}; value-form defines not supported, registering bare name")
+            else:
+                macro_nm = dfn_part
+            if macro_nm:
+                defines.append(macro_nm)
+        elif arg.startswith("+incdir+"):
+            # Extract include path
+            inc_pth = arg[8:]  # Strip "+incdir+"
+            if inc_pth:
+                incdirs.append(inc_pth)
+        else:
+            filtered.append(arg)
+
+    return filtered, defines, incdirs
+
+
 def _format_step_for_json(step: TraceStep) -> dict:
     """Convert a TraceStep to JSON-serializable dict."""
     result = {
@@ -40,7 +86,14 @@ def main() -> int:
     """
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    parser = argparse.ArgumentParser(description="Bidirectional Hierarchical Netlist Tracer")
+    # Parse +define+ / +incdir+ Verilog tool-style flags before argparse
+    filtered_argv, plus_defines, plus_incdirs = _parse_plus_args(sys.argv[1:])
+
+    parser = argparse.ArgumentParser(
+        description="Bidirectional Hierarchical Netlist Tracer",
+        epilog="Preprocessor defines: Use +define+MACRO[=VAL] (Verilog tool-style). "
+               "Include paths: Use +incdir+PATH (Verilog tool-style, repeatable)."
+    )
     parser.add_argument(
         "-netlist", required=True, help="Path to netlist file or directory of .sv/.v files"
     )
@@ -66,22 +119,12 @@ def main() -> int:
         "-max_depth", type=int, default=None, help="Cap each path to start + max_depth more nodes"
     )
     parser.add_argument(
-        "-defines", default=None, help="Comma-separated list of preprocessor defines"
-    )
-    parser.add_argument(
         "-output",
         default=None,
         help="Output file path. Format inferred from extension: .json (JSON output), "
         "other (text output). Default: None (text to stdout).",
     )
-    parser.add_argument(
-        "-include",
-        dest="include_path",
-        action="append",
-        default=None,
-        help="Additional directory to search for include files (repeatable)",
-    )
-    args = parser.parse_args()
+    args = parser.parse_args(filtered_argv)
 
     # Post-validation: enforce mutually exclusive flags and requirements
     if args.net and args.pin:
@@ -106,7 +149,8 @@ def main() -> int:
         if args.output.lower().endswith(".json"):
             otpt_fmt = "json"
 
-    user_defines = set(args.defines.split(",")) if args.defines else set()
+    # Combine defines from +define+ flags
+    user_defines = set(plus_defines)
 
     netlist_file = args.netlist
     start_name = args.cell
@@ -149,7 +193,9 @@ def main() -> int:
                     pn = pn.strip()
                     if not pn:
                         continue
-                    if pn in pn_st or pn in bus_bss:
+                    pn_base = re.sub(r"\[\d+\]$|<\d+>$", "", pn)
+                    is_indexed = pn != pn_base
+                    if pn in pn_st or pn in bus_bss or (is_indexed and pn_base in pn_st):
                         continue
                     msng.append(pn)
 
@@ -177,7 +223,7 @@ def main() -> int:
         nl_parser = NetlistParser(
             netlist_file,
             defines=user_defines if user_defines else None,
-            include_paths=args.include_path,
+            include_paths=plus_incdirs if plus_incdirs else None,
             format=None,
         )
     except NetlistParseError as e:

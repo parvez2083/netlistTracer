@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import logging
 import os
 import re
 from typing import Optional
 
+from netlist_tracer._logging import get_logger
 from netlist_tracer.model import Instance, SubcktDef
 from netlist_tracer.parsers.includes import expand_includes
 
-_logger = logging.getLogger(__name__)
+_logger = get_logger(__name__)
 
 
 ################################################################################

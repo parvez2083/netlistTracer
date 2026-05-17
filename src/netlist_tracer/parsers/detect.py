@@ -42,11 +42,19 @@ def _score_content(content: str) -> dict[str, int]:
     Outputs:
         Dict mapping format name to accumulated score
     """
-    scores: dict[str, int] = {"edif": 0, "verilog": 0, "spectre": 0, "cdl": 0, "spice": 0, "spf": 0}
+    scores: dict[str, int] = {"edif": 0, "verilog": 0, "spectre": 0, "cdl": 0, "spice": 0, "spf": 0, "spef": 0}
 
     # EDIF: s-expression prefix is unmistakable
     if re.search(r"\(edif\b", content):
         scores["edif"] += 10
+
+    # SPEF: *SPEF header marker (IEEE 1481 standard header)
+    if re.search(r"\*SPEF\b", content):
+        scores["spef"] += 10
+
+    # SPEF fallback markers: *D_NET or *NAME_MAP (if no *SPEF header)
+    if re.search(r"\*D_NET\b", content) or re.search(r"\*NAME_MAP\b", content):
+        scores["spef"] += 5
 
     # SPF/DSPF: *|DSPF, *|RSPF, or *|CCSPF marker (highest SPICE-family priority)
     if re.search(r"\*\|(DSPF|RSPF|CCSPF)", content):
@@ -121,6 +129,7 @@ def _extension_hint(filepath: str) -> Optional[str]:
         ".ckt": "spice",
         ".spf": "spf",
         ".dspf": "spf",
+        ".spef": "spef",
     }
 
     lower_path = filepath.lower()
@@ -182,7 +191,7 @@ def _pick_format(scores: dict[str, int], ext_hint: Optional[str]) -> str:
         return ext_hint
 
     # Rule 4c: Tie with no matching extension hint -- pick by priority
-    priority = ["edif", "spectre", "verilog", "cdl", "spf", "spice"]
+    priority = ["edif", "spectre", "verilog", "cdl", "spef", "spf", "spice"]
     for fmt in priority:
         if fmt in tied_formats:
             return fmt
@@ -199,6 +208,8 @@ def detect_format(filepaths: list[str]) -> str:
 
     Distinguishing markers (by specificity):
     - EDIF:     '(edif ' s-expression prefix (weight 10)
+    - SPEF:     '*SPEF' header marker (weight 10)
+                '*D_NET' or '*NAME_MAP' fallback markers (weight 5)
     - SPF:      '*|DSPF', '*|RSPF', '*|CCSPF' content marker (weight 10)
     - Spectre:  'simulator lang=spectre' directive (weight 10)
                 bare 'subckt <name>' (weight 5)
@@ -214,7 +225,7 @@ def detect_format(filepaths: list[str]) -> str:
         filepaths: List of file paths to scan for format markers.
 
     Returns:
-        Format string: 'edif', 'verilog', 'spectre', 'cdl', 'spf', or 'spice'.
+        Format string: 'edif', 'verilog', 'spectre', 'cdl', 'spef', 'spf', or 'spice'.
     """
     if not filepaths:
         return "spice"
@@ -226,6 +237,7 @@ def detect_format(filepaths: list[str]) -> str:
         "cdl": 0,
         "spice": 0,
         "spf": 0,
+        "spef": 0,
     }
 
     for filepath in filepaths:

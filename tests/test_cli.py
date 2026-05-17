@@ -8,6 +8,62 @@ import sys
 from pathlib import Path
 
 from netlist_tracer import __version__
+from netlist_tracer.cli.trace import _parse_plus_args
+
+################################################################################
+# SECTION: Unit Tests for _expand_plus_args
+# Description: Direct testing of CLI argument expansion for Verilog tool-style flags
+################################################################################
+
+
+def test_parse_plus_args_define_bare() -> None:
+    """Test +define+MACRO extraction to defines list."""
+    filtered, defines, incdirs = _parse_plus_args(["+define+FOO"])
+    assert filtered == [], f"Expected empty filtered, got {filtered}"
+    assert defines == ["FOO"], f"Expected ['FOO'], got {defines}"
+    assert incdirs == [], f"Expected empty incdirs, got {incdirs}"
+
+
+def test_parse_plus_args_define_with_value() -> None:
+    """Test +define+MACRO=VAL extraction (value stripped, macro registered)."""
+    filtered, defines, incdirs = _parse_plus_args(["+define+MACRO=VAL"])
+    assert filtered == [], f"Expected empty filtered, got {filtered}"
+    assert defines == ["MACRO"], f"Expected ['MACRO'], got {defines}"
+    assert incdirs == [], f"Expected empty incdirs, got {incdirs}"
+
+
+def test_parse_plus_args_incdir() -> None:
+    """Test +incdir+/PATH extraction to incdirs list."""
+    filtered, defines, incdirs = _parse_plus_args(["+incdir+/tmp/foo"])
+    assert filtered == [], f"Expected empty filtered, got {filtered}"
+    assert defines == [], f"Expected empty defines, got {defines}"
+    assert incdirs == ["/tmp/foo"], f"Expected ['/tmp/foo'], got {incdirs}"
+
+
+def test_parse_plus_args_mixed_with_dash_args() -> None:
+    """Test that + and - flags are separated: +flags → extracted, -flags → filtered."""
+    filtered, defines, incdirs = _parse_plus_args(["-defines", "A", "+define+B", "-include", "/x", "+incdir+/y"])
+    assert filtered == ["-defines", "A", "-include", "/x"], f"Expected ['-defines', 'A', '-include', '/x'], got {filtered}"
+    assert defines == ["B"], f"Expected ['B'], got {defines}"
+    assert incdirs == ["/y"], f"Expected ['/y'], got {incdirs}"
+
+
+def test_parse_plus_args_multiple() -> None:
+    """Test multiple +define+ and +incdir+ flags in sequence."""
+    filtered, defines, incdirs = _parse_plus_args(
+        ["+define+A", "+define+B", "+define+C", "+incdir+/i1", "+incdir+/i2"]
+    )
+    assert filtered == [], f"Expected empty filtered, got {filtered}"
+    assert defines == ["A", "B", "C"], f"Expected ['A', 'B', 'C'], got {defines}"
+    assert incdirs == ["/i1", "/i2"], f"Expected ['/i1', '/i2'], got {incdirs}"
+
+
+def test_parse_plus_args_passthrough_other() -> None:
+    """Test that non-+flag arguments pass through to filtered list."""
+    filtered, defines, incdirs = _parse_plus_args(["-netlist", "file.v", "-cell", "top", "+define+TEST"])
+    assert filtered == ["-netlist", "file.v", "-cell", "top"], f"Expected passthrough of non-+flags, got {filtered}"
+    assert defines == ["TEST"], f"Expected ['TEST'], got {defines}"
+    assert incdirs == [], f"Expected empty incdirs, got {incdirs}"
 
 
 def test_cli_single_pin_byte_identical() -> None:
@@ -255,7 +311,7 @@ def test_cli_edif_extension_edn() -> None:
 
 
 def test_cli_include_flag() -> None:
-    """Verify -include flag resolves include files from specified directory."""
+    """Verify +incdir+PATH flag resolves include files from specified directory."""
     import os
     import tempfile
 
@@ -287,8 +343,7 @@ def test_cli_include_flag() -> None:
                     str(parent_file),
                     "-output",
                     str(tmp_path),
-                    "-include",
-                    str(tmpdir),
+                    f"+incdir+{str(tmpdir)}",
                 ],
                 capture_output=True,
                 text=True,
@@ -298,7 +353,7 @@ def test_cli_include_flag() -> None:
             with open(tmp_path) as f:
                 data = json.load(f)
             assert "PARENT" in data["subckts"], "PARENT should be parsed"
-            assert "CHILD" in data["subckts"], "CHILD should be resolved via include_path"
+            assert "CHILD" in data["subckts"], "CHILD should be resolved via +incdir+"
         finally:
             if parent_file.exists():
                 parent_file.unlink()
@@ -307,7 +362,7 @@ def test_cli_include_flag() -> None:
 
 
 def test_cli_include_flag_repeated() -> None:
-    """Verify -include flag can be repeated for multiple search directories."""
+    """Verify +incdir+ flag can be repeated for multiple search directories."""
     import os
     import tempfile
 
@@ -349,10 +404,8 @@ def test_cli_include_flag_repeated() -> None:
                         str(parent_file),
                         "-output",
                         str(tmp_path),
-                        "-include",
-                        str(tmpdir1),
-                        "-include",
-                        str(tmpdir2),
+                        f"+incdir+{str(tmpdir1)}",
+                        f"+incdir+{str(tmpdir2)}",
                     ],
                     capture_output=True,
                     text=True,
@@ -557,3 +610,189 @@ def test_cli_net_mode_finds_paths(synthetic_spice_basic_sp: str) -> None:
     # Verify net-mode output contains net-related text
     assert "net" in result.stdout.lower(), \
         "Output should contain reference to traced net"
+
+
+def test_cli_plus_define_basic() -> None:
+    """Test that +define+MACRO CLI flag is recognized and equivalent to -defines."""
+    repo_root = Path(__file__).parent.parent
+    netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
+
+    # Run with +define+TEST_MACRO flag
+    result = subprocess.run(
+        [
+            "netlist-tracer",
+            "-netlist",
+            str(netlist_path),
+            "-cell",
+            "picorv32",
+            "-pin",
+            "clk",
+            "+define+TEST_MACRO",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    # Should succeed without error
+    assert result.returncode == 0, f"CLI failed with +define+: {result.stderr}"
+    # Output should be generated
+    assert len(result.stdout) > 0, "Should generate trace output with +define+"
+
+
+def test_cli_plus_define_with_value() -> None:
+    """Test that +define+MACRO=VALUE is accepted (value dropped gracefully)."""
+    repo_root = Path(__file__).parent.parent
+    netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
+
+    result = subprocess.run(
+        [
+            "netlist-tracer",
+            "-netlist",
+            str(netlist_path),
+            "-cell",
+            "picorv32",
+            "-pin",
+            "clk",
+            "+define+MACRO=VAL",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    # Should succeed without error
+    assert result.returncode == 0, f"CLI failed with +define+MACRO=VAL: {result.stderr}"
+
+
+def test_cli_plus_incdir_basic() -> None:
+    """Test that +incdir+PATH CLI flag is recognized and equivalent to -include."""
+    import tempfile
+
+    repo_root = Path(__file__).parent.parent
+    netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
+
+    # Create a temporary include directory (doesn't need to have actual files)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            [
+                "netlist-tracer",
+                "-netlist",
+                str(netlist_path),
+                "-cell",
+                "picorv32",
+                "-pin",
+                "clk",
+                f"+incdir+{tmpdir}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # Should succeed without error
+        assert result.returncode == 0, f"CLI failed with +incdir+: {result.stderr}"
+
+
+def test_cli_plus_multiple_defines() -> None:
+    """Test that multiple +define+ flags accumulate."""
+    repo_root = Path(__file__).parent.parent
+    netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
+
+    result = subprocess.run(
+        [
+            "netlist-tracer",
+            "-netlist",
+            str(netlist_path),
+            "-cell",
+            "picorv32",
+            "-pin",
+            "clk",
+            "+define+MACRO1",
+            "+define+MACRO2",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    # Should succeed without error
+    assert result.returncode == 0, f"CLI failed with multiple +define+: {result.stderr}"
+
+
+def test_cli_plus_multiple_repeats() -> None:
+    """Test that multiple +define+ and +incdir+ flags accumulate."""
+    import tempfile
+
+    repo_root = Path(__file__).parent.parent
+    netlist_path = repo_root / "tests/fixtures/vendored/picorv32.v"
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        result = subprocess.run(
+            [
+                "netlist-tracer",
+                "-netlist",
+                str(netlist_path),
+                "-cell",
+                "picorv32",
+                "-pin",
+                "clk",
+                "+define+MACRO_A",
+                "+define+MACRO_B",
+                "+define+MACRO_C",
+                f"+incdir+{tmpdir}",
+                f"+incdir+{tmpdir}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # Should succeed without error
+        assert result.returncode == 0, f"CLI failed with repeated +flags: {result.stderr}"
+
+
+def test_cli_peek_accepts_indexed_pin_with_bare_bus() -> None:
+    """Test that CLI accepts indexed pin name (e.g., data[4]) when peek discovered bare bus (data).
+
+    FIX 4 regression test: user passes -pin data[4] when peek only saw 'data' from
+    Verilog port declaration 'input [7:0] data'. The peek validation should accept
+    this because the bare bus 'data' was discovered, and downstream expand_pin will
+    handle the bit expansion.
+    """
+    import os
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a Verilog file with a bare bus port declaration
+        verilog_file = os.path.join(tmpdir, "test_bus.v")
+        with open(verilog_file, "w") as f:
+            f.write("module top(\n")
+            f.write("    input clk,\n")
+            f.write("    input [7:0] data,\n")
+            f.write("    output reg valid\n")
+            f.write(");\n")
+            f.write("always @(posedge clk) valid <= |data;\n")
+            f.write("endmodule\n")
+
+        # Run CLI with -pin data[4] (indexed form)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "netlist_tracer.cli.trace",
+                "-netlist",
+                verilog_file,
+                "-cell",
+                "top",
+                "-pin",
+                "data[4]",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+        # Should succeed (exit 0) — peek discovered 'data', so 'data[4]' is valid
+        assert result.returncode == 0, (
+            f"Expected exit 0 when indexed pin has bare bus in peek; "
+            f"got {result.returncode}. stderr={result.stderr!r}"
+        )
+        # Output should contain some trace (at least the pin name)
+        assert "data" in result.stdout.lower() or "data" in result.stderr.lower(), (
+            f"Expected 'data' reference in output; got stdout={result.stdout!r} stderr={result.stderr!r}"
+        )

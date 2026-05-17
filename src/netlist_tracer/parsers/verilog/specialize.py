@@ -231,11 +231,10 @@ def _sv_assemble(
         params = {}
         alias_pairs = []
         # Look up module definition to get params and aliases
-        for mod in all_modules:
-            if mod["name"] == name:
-                params = mod.get("params", {})
-                alias_pairs = mod.get("aliases") or []
-                break
+        mod = lookup.get(name)
+        if mod:
+            params = mod.get("params", {})
+            alias_pairs = mod.get("aliases") or []
         sub = SubcktDef(name=name, pins=pins_list, params=params)
         # Merge aliases from module definitions
         if alias_pairs:

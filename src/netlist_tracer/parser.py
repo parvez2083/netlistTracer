@@ -32,6 +32,7 @@ _FORMAT_PRIORITY = {
     "spice": 3,
     "verilog": 2,
     "edif": 1,
+    "spef": 0,
     "spf": 0,
 }
 
@@ -50,7 +51,7 @@ class NetlistParser:
         Inputs:
             flpth: Path to netlist file or directory
             cell: Cell/module name to find
-            fmt: Optional explicit format hint ('spice', 'cdl', 'spectre', 'spf',
+            fmt: Optional explicit format hint ('spice', 'cdl', 'spectre', 'spf', 'spef',
                 'verilog', 'edif', or None for auto-detect)
 
         Outputs:
@@ -85,11 +86,11 @@ class NetlistParser:
             workers: Parallel worker count (0 = auto).
             include_paths: Optional list of additional search directories for includes.
             format: Override auto-detection with explicit format string.
-                Valid values: 'spice', 'cdl', 'spectre', 'spf', 'verilog', 'edif', None (auto-detect).
+                Valid values: 'spice', 'cdl', 'spectre', 'spf', 'spef', 'verilog', 'edif', None (auto-detect).
             bus_order: Bus bit ordering for EDIF port arrays ('msb_first' or 'lsb_first'). Ignored for non-EDIF formats.
         """
         # Validate format parameter
-        valid_formats = {"spice", "cdl", "spectre", "spf", "verilog", "edif", None}
+        valid_formats = {"spice", "cdl", "spectre", "spf", "spef", "verilog", "edif", None}
         if format is not None and format not in valid_formats:
             raise NetlistParseError(
                 f"Invalid format '{format}': must be one of "
@@ -141,6 +142,7 @@ class NetlistParser:
                 "cdl",
                 "spf",
                 "dspf",
+                "spef",
                 "edif",
                 "edn",
                 "edf",
@@ -149,7 +151,26 @@ class NetlistParser:
                     glob.glob(os.path.join(filename, "**", f"*.{ext}"), recursive=True)
                 )
                 self.files.extend(glob.glob(os.path.join(filename, f"*.{ext}")))
+                # Add .gz variants for compressible parasitic/SPICE formats
+                # Verilog files are rarely gzipped in practice
+                if ext in ("spf", "dspf", "spef", "spi", "sp", "cir", "cdl"):
+                    self.files.extend(
+                        glob.glob(os.path.join(filename, "**", f"*.{ext}.gz"), recursive=True)
+                    )
+                    self.files.extend(glob.glob(os.path.join(filename, f"*.{ext}.gz")))
             self.files = sorted(set(self.files))
+            # Deduplication: prefer .gz over uncompressed (if both exist, keep only .gz)
+            files_dedup = []
+            gz_bases = set()  # Track base names that have .gz versions
+            for fl in self.files:
+                if fl.endswith(".gz"):
+                    gz_bases.add(fl[:-3])  # Remove .gz suffix to get base
+            for fl in self.files:
+                if not fl.endswith(".gz") and fl in gz_bases:
+                    # Skip uncompressed if .gz version exists
+                    continue
+                files_dedup.append(fl)
+            self.files = files_dedup
             if not self.files:
                 raise NetlistParseError(f"No netlist files found in directory: {filename}")
             _logger.info(f"Parsing {len(self.files)} netlist files from: {filename}")
@@ -204,7 +225,7 @@ class NetlistParser:
 
         Routes to the appropriate parser for one format and returns
         (subckts, instances, global_nets) tuple. Verilog handles multiple
-        files; SPICE/CDL/Spectre/SPF/EDIF expect exactly one file per group.
+        files; SPICE/CDL/Spectre/SPF/SPEF/EDIF expect exactly one file per group.
 
         Args:
             format: Format name ('verilog', 'spice', 'cdl', 'spectre', 'spf', 'edif')
@@ -244,6 +265,14 @@ class NetlistParser:
                     f"spf parser expects exactly one file in group; got {len(files)} files: {files}"
                 )
             sbckts, insts, gbl_nets = self._parse_spf(files[0])
+            return sbckts, insts, gbl_nets
+
+        elif format == "spef":
+            if len(files) != 1:
+                raise NetlistParseError(
+                    f"spef parser expects exactly one file in group; got {len(files)} files: {files}"
+                )
+            sbckts, insts, gbl_nets = self._parse_spef(files[0])
             return sbckts, insts, gbl_nets
 
         else:  # spice, cdl, or unknown defaults to spice
@@ -427,15 +456,83 @@ class NetlistParser:
         # Case 1: Mixed-format directory (pre-detected in __init__)
         if self.format == "mixed":
             frmt_grps = detect_format_per_file(self.files)
-            grps_str = ", ".join(f"{fmt}({len(fls)})" for fmt, fls in sorted(frmt_grps.items()))
-            _logger.info(f"Detected mixed-format directory with groups: {grps_str}")
+
+            # Reclassify files with .spf, .dspf, .spef extensions to their correct format
+            # (extension-based override, since content scoring alone can't distinguish SPF/DSPF from SPICE)
+            spf_exts = (".spf", ".spf.gz", ".dspf", ".dspf.gz", ".spef", ".spef.gz")
+            spf_pths_for_lazy = []
+            reclassified = False
+            for fmt_key in list(frmt_grps.keys()):
+                fls = frmt_grps[fmt_key]
+                spf_matches = [f for f in fls if f.lower().endswith(spf_exts)]
+                if spf_matches:
+                    # Remove from current group
+                    frmt_grps[fmt_key] = [f for f in fls if not f.lower().endswith(spf_exts)]
+                    if not frmt_grps[fmt_key]:
+                        del frmt_grps[fmt_key]
+                    spf_pths_for_lazy.extend(spf_matches)
+                    reclassified = True
+
+            # Only apply lazy registration if there are NO other formats that might collide
+            # (SPICE/CDL/Spectre might have definitions with same name as SPF cells)
+            has_collision_risk = bool(frmt_grps and spf_pths_for_lazy)
+
+            if reclassified:
+                grps_str = ", ".join(f"{fmt}({len(fls)})" for fmt, fls in sorted(frmt_grps.items()))
+                if spf_pths_for_lazy:
+                    grps_str += f", spf({len(spf_pths_for_lazy)})"
+                _logger.info(f"Detected mixed-format directory with groups: {grps_str}")
+            else:
+                grps_str = ", ".join(f"{fmt}({len(fls)})" for fmt, fls in sorted(frmt_grps.items()))
+                _logger.info(f"Detected mixed-format directory with groups: {grps_str}")
 
             per_fmt_rslt: dict[str, tuple[dict[str, SubcktDef], list[Instance], list[str]]] = {}
+
             for fmt, fls in frmt_grps.items():
                 sbckts, insts, gbl_nets = self._dispatch_single_format(fmt, fls)
                 per_fmt_rslt[fmt] = (sbckts, insts, gbl_nets)
 
             self._merge_format_results(per_fmt_rslt)
+
+            # Lazy register SPF/SPEF paths only if no collision risk (no other formats)
+            # If there are other formats, eagerly parse SPF to apply format-priority resolution
+            if spf_pths_for_lazy:
+                if has_collision_risk:
+                    # Eager parse for format-priority collision resolution
+                    spf_rslt: dict[str, tuple[dict[str, SubcktDef], list[Instance], list[str]]] = {}
+                    for spf_pth in spf_pths_for_lazy:
+                        try:
+                            fmt = detect_format([spf_pth])
+                            if fmt == "spef":
+                                from netlist_tracer.parsers.spef import parse_spef
+                                sbckts, insts, gbl_nets = parse_spef(spf_pth, include_paths=self.include_paths)
+                            else:
+                                sbckts, insts, gbl_nets = parse_spf(spf_pth, include_paths=self.include_paths)
+                            # Group by format (spf or spef)
+                            spf_fmt = "spef" if fmt == "spef" else "spf"
+                            if spf_fmt not in spf_rslt:
+                                spf_rslt[spf_fmt] = ({}, [], [])
+                            # Merge results
+                            existing_sbckts, existing_insts, existing_nets = spf_rslt[spf_fmt]
+                            existing_sbckts.update(sbckts)
+                            existing_insts.extend(insts)
+                            existing_nets.extend(gbl_nets)
+                            spf_rslt[spf_fmt] = (existing_sbckts, existing_insts, existing_nets)
+                        except Exception as e:
+                            _logger.warning(f"Failed to eagerly parse SPF '{spf_pth}': {e}")
+
+                    # Now merge SPF results with existing per_fmt_rslt using the merge logic
+                    per_fmt_rslt.update(spf_rslt)
+                    # Re-merge all formats (including SPF) with proper collision resolution
+                    self.subckts = {}
+                    self.instances_by_parent = defaultdict(list)
+                    self.instances_by_celltype = defaultdict(list)
+                    self.instances_by_name = defaultdict(list)
+                    self.global_nets = []
+                    self._merge_format_results(per_fmt_rslt)
+                else:
+                    # Pure SPF/SPEF directory: lazy register
+                    self._register_spf_plchldr(spf_pths_for_lazy)
             return
 
         # Case 2 & 3: Single format (pre-pinned or single file)
@@ -462,6 +559,12 @@ class NetlistParser:
                     self._register_spf_plchldr(spf_pths)
             elif self.format == "spf":
                 sbckts, insts, gbl_nets = self._dispatch_single_format("spf", self.files)
+                self.subckts = sbckts
+                self.global_nets = gbl_nets
+                for inst in insts:
+                    self._add_instance(inst)
+            elif self.format == "spef":
+                sbckts, insts, gbl_nets = self._dispatch_single_format("spef", self.files)
                 self.subckts = sbckts
                 self.global_nets = gbl_nets
                 for inst in insts:
@@ -533,10 +636,12 @@ class NetlistParser:
                 self.pndg_spf_fls[cell_nm] = spf_pth
 
     def mtrl_spf(self, spf_pth: str) -> int:
-        """Full-parse one SPF file and merge into self. Idempotent on path.
+        """Full-parse one SPF/SPEF file and merge into self. Idempotent on path.
+
+        Auto-detects format (SPF/DSPF or SPEF) and dispatches to correct parser.
 
         Inputs:
-            spf_pth: Absolute SPF path to materialize
+            spf_pth: Absolute path to SPF/DSPF/SPEF file to materialize
 
         Outputs:
             int — number of subckts materialized (0 if already materialized)
@@ -546,9 +651,18 @@ class NetlistParser:
             return 0
 
         try:
-            sbckts_spf, insts_spf, _ = parse_spf(spf_pth, include_paths=self.include_paths)
+            # Auto-detect format from filename
+            fmt = detect_format([spf_pth])
+
+            # Dispatch to correct parser
+            if fmt == "spef":
+                from netlist_tracer.parsers.spef import parse_spef
+                sbckts_spf, insts_spf, _ = parse_spef(spf_pth, include_paths=self.include_paths)
+            else:
+                # Default to SPF parser for .spf, .dspf, or unknown
+                sbckts_spf, insts_spf, _ = parse_spf(spf_pth, include_paths=self.include_paths)
         except Exception as e:
-            _logger.warning(f"Failed to parse SPF '{spf_pth}': {type(e).__name__}: {e}")
+            _logger.warning(f"Failed to parse SPF/SPEF '{spf_pth}': {type(e).__name__}: {e}")
             return 0
 
         # Merge subckts: non-empty-wins (placeholder replaced by populated body)
@@ -562,8 +676,8 @@ class NetlistParser:
                 # Collision: check if existing is empty (Spectre shell)
                 has_inst = any(i.parent_cell == sbckt_nm for i in self.instances_by_parent.get(sbckt_nm, []))
                 if not has_inst:
-                    # Empty: replace with populated SPF body
-                    _logger.info(f"Back-annotating '{sbckt_nm}': empty shell -> populated SPF body")
+                    # Empty: replace with populated SPF/SPEF body
+                    _logger.info(f"Back-annotating '{sbckt_nm}': empty shell -> populated SPF/SPEF body")
                     self.subckts[sbckt_nm] = sbckt_spf
                     cnt += 1
 
@@ -578,7 +692,7 @@ class NetlistParser:
 
         # Mark as materialized
         self.mtrl_spf_fls.add(spf_pth)
-        _logger.info(f"Materialized SPF: {spf_pth} ({cnt} subckts)")
+        _logger.info(f"Materialized SPF/SPEF: {spf_pth} ({cnt} subckts)")
         return cnt
 
     def mtrl_all_pndg(self) -> int:
@@ -714,6 +828,20 @@ class NetlistParser:
             Tuple of (subckts dict, instances list, global_nets list)
         """
         subckts, instances, global_nets = parse_spf(filepath, include_paths=self.include_paths)
+        return subckts, instances, global_nets
+
+    def _parse_spef(self, filepath: str) -> tuple[dict[str, SubcktDef], list[Instance], list[str]]:
+        """Parse SPEF netlist and return results without mutation.
+
+        Args:
+            filepath: Path to SPEF/SPEF.gz file
+
+        Returns:
+            Tuple of (subckts dict, instances list, global_nets list)
+        """
+        from netlist_tracer.parsers.spef import parse_spef
+
+        subckts, instances, global_nets = parse_spef(filepath, include_paths=self.include_paths)
         return subckts, instances, global_nets
 
     def _parse_verilog(self) -> None:

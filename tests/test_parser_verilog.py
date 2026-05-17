@@ -874,3 +874,92 @@ class TestVerilogPeek:
         assert pns == ["port_a", "port_b", "port_c"], (
             f"Backtick directives leaked into peek result: {pns}"
         )
+
+
+class TestVerilogUDP:
+    """Tests for Verilog UDP (user-defined primitive) parsing."""
+
+    def test_udp_basic_parse(self, synthetic_udp_simple_v):
+        """Test parsing of basic Verilog UDP definitions."""
+        parser = NetlistParser(synthetic_udp_simple_v)
+        assert parser.format == "verilog"
+        # Should find UDP definitions alongside modules
+        assert "udp_xor" in parser.subckts, "Should parse udp_xor UDP definition"
+        assert "udp_buf" in parser.subckts, "Should parse udp_buf UDP definition"
+        assert "udp_user" in parser.subckts, "Should parse udp_user module"
+        assert "top" in parser.subckts, "Should parse top module"
+
+    def test_udp_port_extraction(self, synthetic_udp_simple_v):
+        """Test that UDP port lists are correctly extracted."""
+        parser = NetlistParser(synthetic_udp_simple_v)
+        # udp_xor has ports: output y, input a, input b
+        udp_xor = parser.subckts["udp_xor"]
+        assert len(udp_xor.pins) == 3, (
+            f"udp_xor should have 3 pins, got {len(udp_xor.pins)}"
+        )
+        assert set(udp_xor.pins) == {"y", "a", "b"}, (
+            f"udp_xor pins should be {{y, a, b}}, got {set(udp_xor.pins)}"
+        )
+
+    def test_udp_no_instances(self, synthetic_udp_simple_v):
+        """Test that UDP has no instances (truth table contents skipped)."""
+        parser = NetlistParser(synthetic_udp_simple_v)
+        # UDP should have no instances (truth table is irrelevant for tracing)
+        insts_in_udp = parser.instances_by_parent.get("udp_xor", [])
+        assert len(insts_in_udp) == 0, "UDP should have no instances"
+
+    def test_udp_instance_in_module(self, synthetic_udp_simple_v):
+        """Test that instances of UDPs are recognized in modules."""
+        parser = NetlistParser(synthetic_udp_simple_v)
+        # udp_user module instantiates udp_xor and udp_buf
+        insts_in_user = parser.instances_by_parent.get("udp_user", [])
+        assert len(insts_in_user) == 2, (
+            f"udp_user should have 2 instances, got {len(insts_in_user)}"
+        )
+        # Verify instance cell types
+        cell_types = {inst.cell_type for inst in insts_in_user}
+        assert "udp_xor" in cell_types, "Should have udp_xor instance"
+        assert "udp_buf" in cell_types, "Should have udp_buf instance"
+
+    def test_udp_tracer_leaf(self, synthetic_udp_simple_v):
+        """Test that UDP is treated as a leaf cell and trace terminates at UDP."""
+        from netlist_tracer.tracer import BidirectionalTracer
+
+        parser = NetlistParser(synthetic_udp_simple_v)
+        # Verify that parser loaded the UDP and it's available for tracing
+        assert "udp_xor" in parser.subckts, "UDP should be registered in parser for tracing"
+        assert "top" in parser.subckts, "Top module should be registered"
+
+        # Invoke the tracer on 'clk' pin from top
+        tracer = BidirectionalTracer(parser)
+        results = tracer.trace_pins("top", pins=["clk"])
+        paths = results.get("clk", [])
+
+        # Verify at least one path was found
+        assert len(paths) >= 1, "Expected at least one path from top.clk"
+
+        # Verify the final step terminates at UDP (leaf cell)
+        last_step = paths[0][-1]
+        assert last_step.cell == "udp_xor", (
+            f"Expected path to terminate at udp_xor (leaf), got {last_step.cell}"
+        )
+
+    def test_udp_multiple_definitions(self, synthetic_udp_simple_v):
+        """Test file with multiple UDP definitions."""
+        parser = NetlistParser(synthetic_udp_simple_v)
+        # Count UDPs vs regular modules
+        udp_count = sum(
+            1 for name in parser.subckts.keys()
+            if name in {"udp_xor", "udp_buf"}
+        )
+        assert udp_count == 2, (
+            f"Should have 2 UDP definitions, got {udp_count}"
+        )
+
+    def test_udp_peek_pins(self, synthetic_udp_simple_v):
+        """Test that peek_pins works on UDP definitions."""
+        pins = NetlistParser.peek_pins(synthetic_udp_simple_v, "udp_xor")
+        assert pins is not None, "peek_pins should find udp_xor"
+        assert set(pins) == {"y", "a", "b"}, (
+            f"udp_xor pins should be {{y, a, b}}, got {set(pins)}"
+        )

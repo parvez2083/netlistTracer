@@ -90,6 +90,12 @@ def synthetic_verilog_defparam_v(fixtures_synthetic_dir):
 
 
 @pytest.fixture
+def synthetic_udp_simple_v(fixtures_synthetic_dir):
+    """Path to synthetic udp_simple.v fixture (Verilog UDP definitions and usage)."""
+    return os.path.join(fixtures_synthetic_dir, "udp_simple.v")
+
+
+@pytest.fixture
 def fixtures_vendored_dir():
     """Return path to vendored fixtures directory."""
     return os.path.join(os.path.dirname(__file__), "fixtures", "vendored")

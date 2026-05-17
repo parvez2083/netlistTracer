@@ -22,6 +22,24 @@ from typing import Optional
 # N, P, F, A) using longest-suffix-match-first algorithm.
 ################################################################################
 
+# Unit mapping: key is suffix (lowercase for consistency), value is multiplier
+_UNIT_MAP = {
+    "t": 1e12,
+    "g": 1e9,
+    "meg": 1e6,
+    "k": 1e3,
+    "m": 1e-3,  # HSPICE: M = milli, not mega
+    "u": 1e-6,
+    "μ": 1e-6,  # Unicode mu (micro)
+    "n": 1e-9,
+    "p": 1e-12,
+    "f": 1e-15,
+    "a": 1e-18,
+}
+
+# Sort by length descending (longest-suffix-match-first)
+_SORTED_UNIT_KEYS = sorted(_UNIT_MAP.keys(), key=len, reverse=True)
+
 
 def parse_numerical(value_str: str) -> Optional[float]:
     """
@@ -48,33 +66,15 @@ def parse_numerical(value_str: str) -> Optional[float]:
     if not value_str:
         return None
 
-    # Unit mapping: key is suffix (lowercase for consistency), value is multiplier
-    units = {
-        "t": 1e12,
-        "g": 1e9,
-        "meg": 1e6,
-        "k": 1e3,
-        "m": 1e-3,  # HSPICE: M = milli, not mega
-        "u": 1e-6,
-        "μ": 1e-6,  # Unicode mu (micro)
-        "n": 1e-9,
-        "p": 1e-12,
-        "f": 1e-15,
-        "a": 1e-18,
-    }
-
-    # Sort by length descending (longest-suffix-match-first)
-    sorted_units = sorted(units.keys(), key=len, reverse=True)
-
     # Try to match suffix (case-insensitive)
     # Use lowercase for comparison, but check original string too for unicode
     lower_str = value_str.lower()
-    for suffix in sorted_units:
+    for suffix in _SORTED_UNIT_KEYS:
         if lower_str.endswith(suffix):
             numeric_part = value_str[: -len(suffix)].strip()
             try:
                 base_value = float(numeric_part)
-                return base_value * units[suffix]
+                return base_value * _UNIT_MAP[suffix]
             except ValueError:
                 return None
 

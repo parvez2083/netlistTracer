@@ -1,4 +1,29 @@
-*SPEF "1.0" "ns" "1pF" "1ohm"
-*D_NET clk 0.1
-*CAP 1 0.05pF
+*SPEF "IEEE 1481-1998"
+*DESIGN "simple_inv"
+*DATE "May 17 2026"
+*DIVIDER /
+*DELIMITER :
+*T_UNIT 1 NS
+*C_UNIT 1 PF
+*R_UNIT 1 OHM
+
+*NAME_MAP
+*1 A
+*2 Z
+*3 gnd
+
+*PORTS
+*1 I
+*2 O
+
+*D_NET *1 2.5
+*CAP
+1 *1 *3 1.0
+*END
+
+*D_NET *2 3.5
+*RES
+1 *2 *3 50.0
+*CAP
+2 *2 *3 1.5
 *END

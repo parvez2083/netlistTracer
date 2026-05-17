@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import difflib
 import re
 import sys
 from collections import deque
@@ -84,6 +85,9 @@ def _spf_pin_from_net(net: str) -> str | None:
 
 
 _BUS_BRKT_RE = re.compile(r"(?:\[\d+\]|<\d+>)$")
+_RE_VL_LITERAL = re.compile(r"^\d+'[bdohBDOH][0-9a-fA-FxXzZ_?]+$")
+_RE_VDD_VSS = re.compile(r"^(VDD|VSS)")
+_RE_BUS_INDEXED = re.compile(r"(?:\[\d+\]|<\d+>)$")
 
 
 def suggest_pins(query: str, pins: list[str]) -> list[str]:
@@ -100,8 +104,6 @@ def suggest_pins(query: str, pins: list[str]) -> list[str]:
     Used by both the tracer's pin-not-found path and the CLI's peek pre-validation
     path so suggestion quality stays consistent across entry points.
     """
-    import difflib
-
     bases = list(dict.fromkeys(_BUS_BRKT_RE.sub("", p) for p in pins))
     q = query.lower()
     seen: set[str] = set()
@@ -316,8 +318,6 @@ class BidirectionalTracer:
         if not start_matches:
             print(f"ERROR: '{start_name}' not found as cell type or instance name", file=sys.stderr)
             # Suggest similar cell names using fuzzy matching
-            import difflib
-
             all_cells = list(self.parser.subckts.keys())
             suggestions = difflib.get_close_matches(start_name, all_cells, n=10, cutoff=0.6)
             if suggestions:
@@ -336,8 +336,6 @@ class BidirectionalTracer:
                     file=sys.stderr,
                 )
                 # Suggest similar cell names using fuzzy matching
-                import difflib
-
                 all_cells = list(self.parser.subckts.keys())
                 suggestions = difflib.get_close_matches(target_name, all_cells, n=10, cutoff=0.6)
                 if suggestions:
@@ -427,8 +425,8 @@ class BidirectionalTracer:
             p
             for p in subckt.pins
             if p != name
-            and re.search(r"(?:\[\d+\]|<\d+>)$", p)
-            and re.sub(r"(?:\[\d+\]|<\d+>)$", "", p) == name
+            and _RE_BUS_INDEXED.search(p)
+            and _BUS_BRKT_RE.sub("", p) == name
         ]
 
     def _bfs_from_seed(
@@ -492,12 +490,12 @@ class BidirectionalTracer:
             if curr_net == "":
                 continue
 
-            if re.match(r"^\d+'[bdohBDOH][0-9a-fA-FxXzZ_?]+$", curr_net):
+            if _RE_VL_LITERAL.match(curr_net):
                 if len(path) > 1:
                     all_paths.append(path)
                 continue
 
-            if re.match(r"^(VDD|VSS)", curr_net) and len(path) > 1:
+            if _RE_VDD_VSS.match(curr_net) and len(path) > 1:
                 all_paths.append(path)
                 continue
 
@@ -533,9 +531,10 @@ class BidirectionalTracer:
             self._mtrl_if_pndg(curr_cell)
 
             for inst in self.parser.instances_by_parent.get(curr_cell, []):
-                if curr_net not in inst.nets:
+                try:
+                    net_pos = inst.nets.index(curr_net)
+                except ValueError:
                     continue
-                net_pos = inst.nets.index(curr_net)
 
                 # Lazy SPF: materialize child before lookup
                 self._mtrl_if_pndg(inst.cell_type)
@@ -571,7 +570,7 @@ class BidirectionalTracer:
                         # <2nH> for L) so the user sees physical magnitude;
                         # falls back to the SPF entry-pin name or
                         # cell_type:position when value is unavailable.
-                        value = inst.params.get("_value") if hasattr(inst, "params") else None
+                        value = inst.params.get("_value")
                         if value:
                             unit = "ohm" if inst.cell_type.upper() == "R" else "H"
                             thru_label = f"<{value}{unit}>"
@@ -644,6 +643,25 @@ class BidirectionalTracer:
                         inst_stack=new_stack,
                     )
                     queue.append((inst.parent_cell, parent_net, new_stack, path + [new_step]))
+
+            # Top-level port termination: if we reach a port of the current cell
+            # at the top level (no inst_stack) and haven't yet reported a path,
+            # emit this path as a valid termination point. This handles parasitic
+            # networks and other cases where the trace ends at a port.
+            if not inst_stack and subckt and curr_net in subckt.pin_to_pos and len(path) > 1:
+                if (curr_cell, curr_net) not in {(s.cell, s.pin_or_net) for s in path}:
+                    # Avoid duplicate entries if the port was already visited
+                    # Add a final port step to make the path explicit
+                    port_step = TraceStep(
+                        cell=curr_cell,
+                        pin_or_net=curr_net,
+                        direction="port",
+                        instance_name=None,
+                        inst_stack=inst_stack,
+                    )
+                    port_path = path + [port_step]
+                    if port_path not in all_paths:
+                        all_paths.append(port_path)
 
             # Dead-end detection: only fires when this iteration neither queued
             # a new state nor recorded a path via an endpoint emission. The extra

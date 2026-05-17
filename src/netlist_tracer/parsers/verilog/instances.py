@@ -27,8 +27,10 @@ _logger = get_logger(__name__)
 # Pre-compiled patterns
 _RE_MODULE = re.compile(r"\bmodule\s+(\w+)")
 _RE_INTERFACE = re.compile(r"\binterface\s+(\w+)")
+_RE_PRIMITIVE = re.compile(r"\bprimitive\s+(\w+)")
 _RE_ENDMOD = re.compile(r"\bendmodule\b")
 _RE_ENDINTERFACE = re.compile(r"\bendinterface\b")
+_RE_ENDPRIMITIVE = re.compile(r"\bendprimitive\b")
 _RE_DEFPARAM = re.compile(r"\bdefparam\s+([\w\.]+)\.(\w+)\s*=\s*([^;]+);")
 
 
@@ -201,28 +203,69 @@ def _sv_parse_file(args: tuple[str, dict, set, dict]) -> list:
     modules = []
     pos = 0
     while True:
-        # Find next module or interface definition
+        # Find next module, interface, or primitive definition
         mm = _RE_MODULE.search(raw, pos)
         im = _RE_INTERFACE.search(raw, pos)
+        pm = _RE_PRIMITIVE.search(raw, pos)
 
         # Determine which comes first
-        if mm and im:
-            if mm.start() < im.start():
-                next_match = mm
-                is_interface = False
-            else:
-                next_match = im
-                is_interface = True
-        elif mm:
-            next_match = mm
-            is_interface = False
-        elif im:
-            next_match = im
-            is_interface = True
+        next_match = None
+        is_interface = False
+        is_primitive = False
+
+        candidates = []
+        if mm:
+            candidates.append((mm.start(), mm, "module"))
+        if im:
+            candidates.append((im.start(), im, "interface"))
+        if pm:
+            candidates.append((pm.start(), pm, "primitive"))
+
+        if candidates:
+            start_pos, next_match, match_type = min(candidates, key=lambda x: x[0])
+            is_interface = match_type == "interface"
+            is_primitive = match_type == "primitive"
         else:
             break
 
-        if is_interface:
+        if is_primitive:
+            # UDP (user-defined primitive) parsing
+            prim_nm = next_match.group(1)
+            paren_opn = raw.find("(", next_match.end())
+            semi = raw.find(";", next_match.end())
+
+            if paren_opn < 0 or (0 <= semi < paren_opn):
+                pos = max(semi + 1, next_match.end())
+                continue
+
+            port_cls = _sv_match_paren(raw, paren_opn + 1)
+            if port_cls < 0:
+                pos = next_match.end()
+                continue
+
+            # Extract port list from primitive header
+            ports = _sv_parse_ports(raw[paren_opn + 1 : port_cls], define_values)
+
+            # Find endprimitive
+            epm = _RE_ENDPRIMITIVE.search(raw, port_cls)
+            body_end = epm.start() if epm else len(raw)
+            end_pos = epm.end() if epm else len(raw)
+
+            # UDP body is irrelevant for tracing (truth table), skip it
+            # Create a SubcktDef for the UDP with empty body and no instances
+            modules.append(
+                {
+                    "name": prim_nm,
+                    "ports": ports,
+                    "insts": [],
+                    "body": "",
+                    "param_names": [],
+                    "wires_2d": {},
+                    "aliases": [],
+                }
+            )
+            pos = end_pos
+        elif is_interface:
             # Interface parsing
             intrfc_nm = next_match.group(1)
             paren_opn = raw.find("(", next_match.end())

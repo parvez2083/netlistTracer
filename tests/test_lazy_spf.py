@@ -405,10 +405,194 @@ dspf_include "{spf_file}"
         )
 
 
+def test_folder_gz_discovery():
+    """Test that folder mode discovers .dspf.gz, .spf.gz files in addition to uncompressed."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create .dspf.gz file
+        dspf_plain = os.path.join(tmpdir, 'parasitic.dspf')
+        with open(dspf_plain, 'w') as f:
+            f.write('.SUBCKT from_dspf_gz p1 p2\n.ENDS\n')
+
+        dspf_gz = os.path.join(tmpdir, 'parasitic.dspf.gz')
+        with open(dspf_plain, 'rb') as f_in:
+            with gzip.open(dspf_gz, 'wb') as f_out:
+                f_out.writelines(f_in)
+
+        # Create .spice file (uncompressed)
+        spice_file = os.path.join(tmpdir, 'circuit.spi')
+        with open(spice_file, 'w') as f:
+            f.write('.SUBCKT top a b\nX1 a b from_dspf_gz\n.ENDS\n')
+
+        # Parse folder (should discover both .dspf.gz and .spi)
+        parser = NetlistParser(tmpdir)
+
+        # Verify both files were detected and parsed
+        assert 'top' in parser.subckts, "Expected top cell from SPICE file"
+        assert 'from_dspf_gz' in parser.subckts, "Expected DSPF cell from .dspf.gz file"
+        assert len(parser.files) >= 2, f"Expected at least 2 files, got {parser.files}"
+
+
+def test_folder_lazy_spf_registration():
+    """Test that pure SPF folders apply lazy registration.
+
+    Create a folder with ONLY SPF files (no SPICE); verify SPF cells are
+    registered as placeholders (not eagerly materialized).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPF file
+        spf_file = os.path.join(tmpdir, 'parasitic.spf')
+        with open(spf_file, 'w') as f:
+            f.write('.SUBCKT lazy_cell p1 p2\nR1 p1 p2 1k\n.ENDS\n')
+
+        # Parse folder (pure SPF: lazy mode applies)
+        parser = NetlistParser(tmpdir)
+
+        # Verify SPF cells are registered as placeholders
+        assert 'lazy_cell' in parser.subckts
+        assert 'lazy_cell' in parser.pndg_spf_fls, "Expected lazy_cell to be pending"
+        assert spf_file not in parser.mtrl_spf_fls, "Expected SPF to NOT be materialized yet"
+        assert parser.subckts['lazy_cell'].is_placeholder is True
+
+
+def test_folder_lazy_selective_materialization():
+    """Test that pure SPF folder mode selective materialization works correctly.
+
+    Create a folder with ONLY 3 SPF files (no SPICE). Parse folder (all
+    SPFs become placeholders). Manually materialize one SPF; verify only
+    that one is materialized, others remain pending.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create three SPF files (pure SPF folder)
+        spf1 = os.path.join(tmpdir, 'cell1.spf')
+        with open(spf1, 'w') as f:
+            f.write('.SUBCKT cell1 p1 p2\nR1 p1 p2 1k\n.ENDS\n')
+
+        spf2 = os.path.join(tmpdir, 'cell2.spf')
+        with open(spf2, 'w') as f:
+            f.write('.SUBCKT cell2 p1 p2\nR1 p1 p2 2k\n.ENDS\n')
+
+        spf3 = os.path.join(tmpdir, 'cell3.spf')
+        with open(spf3, 'w') as f:
+            f.write('.SUBCKT cell3 p1 p2\nR1 p1 p2 3k\n.ENDS\n')
+
+        # Parse pure SPF folder (all SPFs lazy)
+        parser = NetlistParser(tmpdir)
+
+        # All three should be pending
+        assert 'cell1' in parser.pndg_spf_fls
+        assert 'cell2' in parser.pndg_spf_fls
+        assert 'cell3' in parser.pndg_spf_fls
+        assert len(parser.mtrl_spf_fls) == 0
+
+        # Materialize only cell1
+        cnt = parser.mtrl_spf(spf1)
+        assert cnt > 0, "Expected cell1 to materialize"
+
+        # Verify state: 1 materialized, 2 pending
+        assert spf1 in parser.mtrl_spf_fls
+        assert spf2 not in parser.mtrl_spf_fls
+        assert spf3 not in parser.mtrl_spf_fls
+        assert 'cell1' not in parser.pndg_spf_fls
+        assert 'cell2' in parser.pndg_spf_fls
+        assert 'cell3' in parser.pndg_spf_fls
+
+
+def test_peek_spef_subckts():
+    """Test peek_spf_subckts on SPEF format (auto-detect format).
+
+    SPEF uses *DESIGN and *PORTS, not .SUBCKT; verify peek works for both.
+    """
+    from netlist_tracer.parsers.peek import peek_spf_subckts
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPEF file
+        spef_file = os.path.join(tmpdir, 'test.spef')
+        with open(spef_file, 'w') as f:
+            f.write("""\
+*DESIGN my_design
+*PORTS
+p1 p2 p3
+*D_NET
+""")
+
+        # Peek at SPEF (should auto-detect format)
+        rslt = peek_spf_subckts(spef_file)
+
+        # Should return design name and port list
+        assert len(rslt) == 1
+        assert rslt[0][0] == 'my_design'
+        assert 'p1' in rslt[0][1]
+        assert 'p2' in rslt[0][1]
+        assert 'p3' in rslt[0][1]
+
+
+def test_folder_spef_lazy_registration():
+    """Test that pure SPEF folders are also registered lazily."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPEF file (pure SPEF folder, no SPICE)
+        spef_file = os.path.join(tmpdir, 'design.spef')
+        with open(spef_file, 'w') as f:
+            f.write("""\
+*DESIGN my_design
+*PORTS
+pin_a pin_b
+*D_NET
+*END
+""")
+
+        # Parse pure SPEF folder (SPEF should be lazy)
+        parser = NetlistParser(tmpdir)
+
+        # Verify SPEF was detected and registered as lazy
+        assert 'my_design' in parser.subckts
+        assert 'my_design' in parser.pndg_spf_fls, "Expected SPEF design to be pending"
+        assert spef_file not in parser.mtrl_spf_fls, "Expected SPEF to NOT be materialized"
+
+
+def test_mtrl_spf_format_detection():
+    """Test that mtrl_spf auto-detects SPEF format and dispatches correctly."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPEF file with design definition
+        spef_file = os.path.join(tmpdir, 'test.spef')
+        with open(spef_file, 'w') as f:
+            f.write("""\
+*DESIGN test_design
+*PORTS
+p1 p2
+*D_NET
+*END
+""")
+
+        # Create a minimal spectre file to trigger lazy registration path
+        scs_file = os.path.join(tmpdir, 'test.scs')
+        with open(scs_file, 'w') as f:
+            f.write('subckt top a b\nends\n')
+
+        # Parse Spectre (no SPFs declared, but we'll manually register)
+        parser = NetlistParser(scs_file)
+
+        # Manually register the SPEF file as pending
+        parser.pndg_spf_fls['test_design'] = spef_file
+
+        # Materialize (should auto-detect SPEF format and use parse_spef)
+        parser.mtrl_spf(spef_file)
+
+        # Verify materialization succeeded and used SPEF parser
+        assert spef_file in parser.mtrl_spf_fls, "Expected SPEF to be materialized"
+        # design should be registered in subckts
+        assert 'test_design' in parser.subckts
+
+
 if __name__ == '__main__':
     test_peek_spf_subckts_multi_cell()
     test_register_spf_placeholders()
     test_materialize_spf_idempotent()
     test_lazy_dump_json_eager_flush()
     test_lazy_pin_validation_no_materialize()
+    test_folder_gz_discovery()
+    test_folder_lazy_spf_registration()
+    test_folder_lazy_selective_materialization()
+    test_peek_spef_subckts()
+    test_folder_spef_lazy_registration()
+    test_mtrl_spf_format_detection()
     print("All tests passed!")

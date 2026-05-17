@@ -7,11 +7,81 @@ import gzip
 import json
 import os
 import re
+from typing import Any
 
 from netlist_tracer._logging import get_logger
 from netlist_tracer.parsers.detect import detect_format
 
 _logger = get_logger(__name__)
+
+
+def _collect_subckt_pins_from_handle(
+    fh: Any,  # file handle (gzip or regular, text mode)
+    target_cell: str | None,
+) -> Any:  # Returns list[str] | None if target_cell, list[tuple[str, list[str]]] if target_cell is None
+    """Collect .SUBCKT pin declarations from file handle.
+
+    Scans for '.SUBCKT <name> <pins...>' lines, handling '+' continuations.
+    Filters by target_cell name (case-insensitive) if provided.
+
+    Inputs:
+        fh: Open file handle (text mode, already decompressed if .gz)
+        target_cell: Cell name to match (None for ALL cells)
+
+    Outputs:
+        If target_cell is provided: list[str] of pins (or None if not found)
+        If target_cell is None: list[(cell_name, pins_list)] for all cells
+    """
+    all_cells = []
+    for ln in fh:
+        ln = ln.rstrip()
+
+        # Look for .SUBCKT line (case-insensitive)
+        m = re.match(r"^\s*\.SUBCKT\s+(\S+)\s+(.*)", ln, re.IGNORECASE)
+        if not m:
+            continue
+
+        sbckt_nm = m.group(1)
+
+        # If target_cell specified, skip non-matching cells
+        if target_cell is not None and sbckt_nm.lower() != target_cell.lower():
+            continue
+
+        pns = []
+        rst_ln = m.group(2).strip()
+
+        # Collect tokens from the rest of this line
+        tks = rst_ln.split()
+        for tk in tks:
+            # Skip params (contain '=')
+            if "=" not in tk:
+                pns.append(tk)
+
+        # Peek next lines for '+' continuations
+        for cn_ln in fh:
+            cn_ln = cn_ln.rstrip()
+            if not cn_ln.lstrip().startswith("+"):
+                break
+            # Remove the '+' and split
+            cn_rst = cn_ln.lstrip()[1:].strip()
+            cn_tks = cn_rst.split()
+            for tk in cn_tks:
+                if "=" not in tk:
+                    pns.append(tk)
+
+        result = (sbckt_nm, pns)
+
+        # Early return if searching for specific cell
+        if target_cell is not None:
+            return pns if pns else None
+
+        # Accumulate if collecting all cells
+        all_cells.append(result)
+
+    # Return accumulated list if target_cell was None, else not found
+    if target_cell is None:
+        return all_cells
+    return None
 
 
 def peek_pins(flpth: str, cell: str, fmt: str | None = None) -> list[str] | None:
@@ -112,50 +182,9 @@ def _peek_spce_fmly(flpth: str, cell: str) -> list[str] | None:
             fh = open(flpth, encoding="utf-8", errors="replace")
 
         try:
-            for ln in fh:
-                ln = ln.rstrip()
-
-                # Look for .SUBCKT line (case-insensitive)
-                m = re.match(
-                    r"^\s*\.SUBCKT\s+(\S+)\s+(.*)",
-                    ln,
-                    re.IGNORECASE,
-                )
-                if not m:
-                    continue
-
-                sbckt_nm = m.group(1)
-                if sbckt_nm.lower() != cell.lower():
-                    continue
-
-                # Found matching .SUBCKT; collect pins from this line and continuations
-                pns = []
-                rst_ln = m.group(2).strip()
-
-                # Collect tokens from the rest of this line
-                tks = rst_ln.split()
-                for tk in tks:
-                    # Skip params (contain '=')
-                    if "=" not in tk:
-                        pns.append(tk)
-
-                # Peek next lines for '+' continuations
-                for cn_ln in fh:
-                    cn_ln = cn_ln.rstrip()
-                    if not cn_ln.lstrip().startswith("+"):
-                        break
-                    # Remove the '+' and split
-                    cn_rst = cn_ln.lstrip()[1:].strip()
-                    cn_tks = cn_rst.split()
-                    for tk in cn_tks:
-                        if "=" not in tk:
-                            pns.append(tk)
-
-                return pns if pns else None
+            return _collect_subckt_pins_from_handle(fh, cell)
         finally:
             fh.close()
-
-        return None
     except Exception as e:
         _logger.debug(f"SPICE-family peek failed for {cell}: {e}")
         return None
@@ -228,13 +257,13 @@ def _peek_spctr(flpth: str, cell: str) -> list[str] | None:
 
 
 def _peek_vrlog_sf(flpth: str, cell: str) -> list[str] | None:
-    """Find 'module <cell> [#(...)] (port_list);' in a single file.
+    """Find 'module <cell> [#(...)] (port_list);' or 'primitive <cell> (port_list);' in a single file.
 
-    Handle multi-line port lists and direction keywords.
+    Handle multi-line port lists and direction keywords. Also handles Verilog UDPs.
 
     Inputs:
         flpth: Path to Verilog file
-        cell: Module name to find
+        cell: Module or UDP name to find
 
     Outputs:
         list[str] of port names (excluding direction keywords), or None
@@ -243,9 +272,16 @@ def _peek_vrlog_sf(flpth: str, cell: str) -> list[str] | None:
         with open(flpth, encoding="utf-8", errors="replace") as fh:
             cnt = fh.read()
 
-        # Find 'module <cell>' boundary (case-sensitive)
+        # Find 'module <cell>' or 'primitive <cell>' boundary (case-sensitive)
+        # Try module first
         pat = r"module\s+" + re.escape(cell) + r"\s*(?:#\s*\(|[\(\[])"
         m = re.search(pat, cnt)
+        is_primitive = False
+        if not m:
+            # Try primitive
+            pat = r"primitive\s+" + re.escape(cell) + r"\s*\("
+            m = re.search(pat, cnt)
+            is_primitive = True
         if not m:
             return None
 
@@ -258,8 +294,8 @@ def _peek_vrlog_sf(flpth: str, cell: str) -> list[str] | None:
         elif cnt[i - 1] == "[":
             i -= 1  # Back up to the '['
 
-        # Handle parameter block '#(...)' if present
-        if m.group().find("#") != -1:
+        # Handle parameter block '#(...)' if present (modules only, not primitives)
+        if not is_primitive and m.group().find("#") != -1:
             # Skip parameter block
             prn_cnt = 1
             j = m.end()
@@ -391,18 +427,95 @@ def _peek_edf(flpth: str, cell: str) -> list[str] | None:
         return None
 
 
-def peek_spf_subckts(spf_pth: str) -> list[tuple[str, list[str]]]:
-    """Cheap scan of an SPF/DSPF file to discover all cell definitions.
+def _collect_spef_cells_from_handle(fh: Any) -> list[tuple[str, list[str]]]:
+    """Collect *DESIGN and *PORTS declarations from SPEF file handle.
 
-    Read only enough to find every `.SUBCKT <name> <pins...>` declaration.
-    No series-R reduction, no instance parsing, no body capture. Handles
-    .gz transparently.
+    SPEF format: *DESIGN <design_name>, *PORTS line(s) with port names.
+    Returns single entry for the design with its port list.
 
     Inputs:
-        spf_pth: Absolute path to .spf, .spef, .dspf file (optional .gz suffix)
+        fh: Open file handle (text mode, already decompressed if .gz)
 
     Outputs:
-        List of (cell_name, [pin1, pin2, ...]) tuples. One per .SUBCKT declaration.
+        List with single (design_name, [port1, port2, ...]) tuple, or empty
+        list if not found or parse fails
+    """
+    design_name = ""
+    ports = []
+
+    for ln in fh:
+        ln = ln.rstrip()
+
+        # Detect *DESIGN directive
+        if ln.startswith("*DESIGN"):
+            pts = ln.split()
+            if len(pts) >= 2:
+                design_name = pts[1]
+                break
+
+    if not design_name:
+        return []
+
+    # Collect *PORTS lines
+    name_map = {}
+    for ln in fh:
+        ln = ln.rstrip()
+
+        # Stop at next major section
+        if ln.startswith("*"):
+            if ln.startswith("*PORTS"):
+                continue
+            elif ln.startswith("*NAME_MAP"):
+                # Switch to collecting NAME_MAP entries (before PORTS)
+                for nm_ln in fh:
+                    nm_ln = nm_ln.rstrip()
+                    if nm_ln.startswith("*"):
+                        # End of NAME_MAP, fall through to process this line
+                        ln = nm_ln
+                        break
+                    m = re.match(r"^\*(\d+)\s+(.+)", nm_ln)
+                    if m:
+                        name_map[f"*{m.group(1)}"] = m.group(2)
+                # Continue with current ln (which is a directive line)
+                if not ln.startswith("*PORTS"):
+                    break
+                continue
+            else:
+                # End of PORTS section
+                break
+
+        # Extract port names from *PORTS content
+        if ln and not ln.startswith("*"):
+            # Port lines: *N I/O/B or space-separated names
+            m = re.match(r"^\*(\d+)\s+[IOB]", ln)
+            if m:
+                # Section-format PORTS with *N I/O/B; resolve via name_map
+                alias = f"*{m.group(1)}"
+                if alias in name_map:
+                    ports.append(name_map[alias])
+            else:
+                # Traditional inline port names: space-separated
+                pts = ln.split()
+                ports.extend(pts)
+
+    # Return design as single subckt-like entry
+    if design_name:
+        return [(design_name, ports)]
+    return []
+
+
+def peek_spf_subckts(spf_pth: str) -> list[tuple[str, list[str]]]:
+    """Cheap scan of SPF/DSPF/SPEF file to discover all cell definitions.
+
+    Auto-detects format (SPF/DSPF use .SUBCKT, SPEF uses *DESIGN/*PORTS).
+    Read only enough to find definitions. No series-R reduction, no instance
+    parsing, no body capture. Handles .gz transparently.
+
+    Inputs:
+        spf_pth: Absolute path to .spf, .dspf, .spef file (optional .gz suffix)
+
+    Outputs:
+        List of (cell_name, [pin1, pin2, ...]) tuples. One per cell definition.
         Empty list on parse error.
     """
     try:
@@ -413,47 +526,25 @@ def peek_spf_subckts(spf_pth: str) -> list[tuple[str, list[str]]]:
             fh = open(spf_pth, encoding="utf-8", errors="replace")
 
         try:
-            rslts = []
-            for ln in fh:
-                ln = ln.rstrip()
+            # Auto-detect format: peek first few lines
+            # SPEF files have *DESIGN, SPF/DSPF files have .SUBCKT
+            fh_peek_line = fh.readline()
+            is_spef = "*DESIGN" in fh_peek_line or "*design" in fh_peek_line.lower()
 
-                # Look for .SUBCKT line (case-insensitive)
-                m = re.match(
-                    r"^\s*\.SUBCKT\s+(\S+)\s+(.*)",
-                    ln,
-                    re.IGNORECASE,
-                )
-                if not m:
-                    continue
+            # Reset file position for actual parse
+            fh.seek(0)
 
-                sbckt_nm = m.group(1)
-                pns = []
-                rst_ln = m.group(2).strip()
+            if is_spef:
+                # SPEF format: *DESIGN + *PORTS
+                rslts = _collect_spef_cells_from_handle(fh)
+            else:
+                # SPF/DSPF format: .SUBCKT
+                rslts = _collect_subckt_pins_from_handle(fh, None)
 
-                # Collect tokens from the rest of this line
-                tks = rst_ln.split()
-                for tk in tks:
-                    # Skip params (contain '=')
-                    if "=" not in tk:
-                        pns.append(tk)
-
-                # Peek next lines for '+' continuations
-                for cn_ln in fh:
-                    cn_ln = cn_ln.rstrip()
-                    if not cn_ln.lstrip().startswith("+"):
-                        break
-                    # Remove the '+' and split
-                    cn_rst = cn_ln.lstrip()[1:].strip()
-                    cn_tks = cn_rst.split()
-                    for tk in cn_tks:
-                        if "=" not in tk:
-                            pns.append(tk)
-
-                rslts.append((sbckt_nm, pns if pns else []))
-
-            return rslts
+            # Convert None to empty list (for consistency with API contract)
+            return rslts if rslts is not None else []
         finally:
             fh.close()
     except Exception as e:
-        _logger.debug(f"SPF peek failed for {spf_pth}: {e}")
+        _logger.debug(f"SPF/SPEF peek failed for {spf_pth}: {e}")
         return []

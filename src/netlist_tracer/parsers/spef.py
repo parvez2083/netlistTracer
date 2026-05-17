@@ -1,55 +1,37 @@
-"""Parser for SPEF (Standard Parasitic Exchange Format) files."""
+#!/usr/bin/env python3
+################################################################################
+# AI GENERATED CODE - Review and test before production use
+# Author: AI Generated | Date: 2026-05-17
+#
+# Description: Parser for SPEF (Standard Parasitic Exchange Format) files.
+# Converts SPEF files into the standard tracer model (SubcktDef + Instance lists)
+# so SPEF is treated as a first-class netlist format alongside SPF/Spectre/SPICE.
+#
+# Usage: Called internally by NetlistParser; not intended for direct use.
+#   Example: subckts, insts, global_nets = parse_spef('design.spef')
+#
+# Changelog:
+#   [2026-05-17] - Rewrite SPEF as first-class format: deleted SpefData/SpefNet/
+#                  SpefOverlay; returns (subckts_dict, instances_list, []) tuple
+#                  matching SPF parser signature; handles *D_NET, *CONN, *CAP,
+#                  *RES, *NAME_MAP indirection, and *C_UNIT/*R_UNIT scaling.
+################################################################################
 
 from __future__ import annotations
 
 import gzip
 import re
-from dataclasses import dataclass, field
 
 from netlist_tracer._logging import get_logger
 from netlist_tracer.exceptions import NetlistParseError
+from netlist_tracer.model import Instance, SubcktDef
 
 _logger = get_logger(__name__)
 
 
 ################################################################################
-# SECTION: SPEF Data Models
-# Description: Dataclasses for SPEF file contents and overlay functionality.
-################################################################################
-
-
-@dataclass
-class SpefNet:
-    """Represents a single net entry from a SPEF *D_NET block."""
-
-    name: str
-    total_cap: float = 0.0  # Farads (post-scaling)
-    total_res: float | None = None  # Ohms (post-scaling) or None if no *RES present
-    num_caps: int = 0
-    num_res: int = 0
-    pins: list[str] = field(default_factory=list)
-
-
-@dataclass
-class SpefData:
-    """Parsed SPEF aggregate populated by parse_spef()."""
-
-    design_name: str = ""
-    divider: str = "/"
-    delimiter: str = ":"
-    bus_delim_open: str = "["
-    bus_delim_close: str = "]"
-    t_unit_scale: float = 1.0  # Seconds (from *T_UNIT)
-    c_unit_scale: float = 1.0  # Farads (from *C_UNIT)
-    r_unit_scale: float = 1.0  # Ohms (from *R_UNIT)
-    name_map: dict[str, str] = field(default_factory=dict)  # *5 -> real_net_name
-    ports: list[str] = field(default_factory=list)  # *PORTS lines
-    nets: dict[str, SpefNet] = field(default_factory=dict)  # name -> SpefNet
-
-
-################################################################################
-# SECTION: SPEF Parsing
-# Description: Parse SPEF/SPEF.GZ files with unit scaling and name indirection.
+# SECTION: SPEF Unit Value Parsing
+# Description: Parse SPEF unit directives (*T_UNIT, *C_UNIT, *R_UNIT).
 ################################################################################
 
 
@@ -113,43 +95,84 @@ def _parse_unit_value(unit_str: str) -> float:
         return value
 
 
-def parse_spef(path: str) -> SpefData:
-    """
-    Parse a SPEF (.spef or .spef.gz) file into SpefData.
+################################################################################
+# SECTION: SPEF State Management
+# Description: Track parsing state for SPEF directives and net resolution.
+################################################################################
 
-    Handles *NAME_MAP indirection, *PORTS, *D_NET blocks with *CONN, *CAP, *RES
-    sub-sections, and unit scaling from *T_UNIT, *C_UNIT, *R_UNIT. Star-references
-    (*5) are resolved to real names during parse so SpefData.nets keys are real names.
+
+class _SpefState:
+    """Per-parse state for SPEF directives and name indirection."""
+
+    def __init__(self) -> None:
+        self.design_name: str = ""
+        self.divider: str = "/"
+        self.delimiter: str = ":"
+        self.bus_delim_open: str = "["
+        self.bus_delim_close: str = "]"
+        self.t_unit_scale: float = 1.0  # Seconds (from *T_UNIT)
+        self.c_unit_scale: float = 1.0  # Farads (from *C_UNIT)
+        self.r_unit_scale: float = 1.0  # Ohms (from *R_UNIT)
+        self.name_map: dict[str, str] = {}  # *5 -> real_net_name
+        self.ports: list[str] = []  # Port names from *PORTS
+
+
+################################################################################
+# SECTION: SPEF Parsing
+# Description: Main parser for SPEF file format.
+################################################################################
+
+
+def parse_spef(
+    filepath: str, include_paths: list[str] | None = None
+) -> tuple[dict[str, SubcktDef], list[Instance], list[str]]:
+    """
+    Parse a SPEF (.spef or .spef.gz) file into tracer model.
+
+    Returns a SubcktDef for the design and Instance objects for R/C elements,
+    matching the SPF parser interface. Handles *NAME_MAP indirection,
+    *PORTS, *D_NET blocks with *CONN, *CAP, *RES sub-sections, and unit
+    scaling from *T_UNIT, *C_UNIT, *R_UNIT. Star-references (*5) are
+    resolved to real names during parse so downstream code sees only real names.
 
     Inputs:
-        path: Filesystem path to .spef or .spef.gz file
+        filepath: Filesystem path to .spef or .spef.gz file
+        include_paths: Reserved for future use; not consumed in v0.6.0
 
     Outputs:
-        SpefData populated with all parsed nets; raises NetlistParseError on
-        malformed input
+        (subckts dict with single design entry, instances list of R/C/X,
+         global_nets empty list) or raises NetlistParseError on malformed input
 
     Complexity:
         O(n) where n is file lines; one pass with state machine
     """
-    data = SpefData()
+    stt = _SpefState()
 
     # Determine if file is gzipped and open accordingly
     try:
-        if path.endswith(".gz"):
-            with gzip.open(path, "rt", encoding="utf-8") as f:
+        if filepath.lower().endswith(".gz"):
+            with gzip.open(filepath, "rt", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
         else:
-            with open(path, encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
-    except Exception as e:
-        raise NetlistParseError(f"Failed to read SPEF file '{path}': {e}") from e
+    except OSError as e:
+        raise NetlistParseError(f"Failed to read SPEF file '{filepath}': {e}") from e
 
     if not lines:
-        raise NetlistParseError(f"Empty SPEF file: {path}")
+        raise NetlistParseError(f"Empty SPEF file: {filepath}")
 
-    # State machine: track current net being parsed
-    crnt_net: SpefNet | None = None
+    # State machine: track current net and section modes
+    crnt_net: str | None = None  # Name of net currently inside *D_NET block
+    net_pins: dict[str, list[str]] = {}  # net_name -> list of pin refs
+    r_insts: list[Instance] = []  # R/C instances to emit
     found_end = False
+
+    # Section state flags (for multi-line section formats)
+    in_name_map = False
+    in_ports_sec = False
+    in_cap_section = False
+    in_res_section = False
 
     for _line_num, line in enumerate(lines, 1):
         line = line.rstrip("\n\r")
@@ -159,73 +182,124 @@ def parse_spef(path: str) -> SpefData:
         if not stripped or stripped.startswith("*'"):
             continue
 
+        # *SPEF "version" "time_unit" "capacitance_unit" "resistance_unit"
+        # This is a header marker; parse it but don't require it
+        m = re.match(r"\*SPEF\s+", stripped)
+        if m:
+            continue
+
         # *DESIGN <name>
         m = re.match(r"\*DESIGN\s+(\S+)", stripped)
         if m:
-            data.design_name = m.group(1)
+            stt.design_name = m.group(1).strip('\'"')
             continue
 
         # *DIVIDER <char>
         m = re.match(r"\*DIVIDER\s+(\S)", stripped)
         if m:
-            data.divider = m.group(1)
+            stt.divider = m.group(1)
             continue
 
         # *DELIMITER <char>
         m = re.match(r"\*DELIMITER\s+(\S)", stripped)
         if m:
-            data.delimiter = m.group(1)
+            stt.delimiter = m.group(1)
             continue
 
         # *BUS_DELIMITER_OPEN <char>
         m = re.match(r"\*BUS_DELIMITER_OPEN\s+(\S)", stripped)
         if m:
-            data.bus_delim_open = m.group(1)
+            stt.bus_delim_open = m.group(1)
             continue
 
         # *BUS_DELIMITER_CLOSE <char>
         m = re.match(r"\*BUS_DELIMITER_CLOSE\s+(\S)", stripped)
         if m:
-            data.bus_delim_close = m.group(1)
+            stt.bus_delim_close = m.group(1)
             continue
 
         # *T_UNIT <value> <unit>
         m = re.match(r"\*T_UNIT\s+(.+)", stripped)
         if m:
-            data.t_unit_scale = _parse_unit_value(m.group(1))
+            stt.t_unit_scale = _parse_unit_value(m.group(1))
             continue
 
         # *C_UNIT <value> <unit>
         m = re.match(r"\*C_UNIT\s+(.+)", stripped)
         if m:
-            data.c_unit_scale = _parse_unit_value(m.group(1))
+            stt.c_unit_scale = _parse_unit_value(m.group(1))
             continue
 
         # *R_UNIT <value> <unit>
         m = re.match(r"\*R_UNIT\s+(.+)", stripped)
         if m:
-            data.r_unit_scale = _parse_unit_value(m.group(1))
+            stt.r_unit_scale = _parse_unit_value(m.group(1))
             continue
 
-        # *NAME_MAP <alias> <real_name>
+        # *NAME_MAP section header (bare keyword)
+        if stripped == "*NAME_MAP":
+            in_name_map = True
+            continue
+
+        # NAME_MAP data lines within section: *<idx> <real_name>
+        if in_name_map:
+            # Check if this is a NAME_MAP data line: *<number> <name>
+            m = re.match(r"^(\*\d+)\s+(\S+)", stripped)
+            if m:
+                alias = m.group(1)
+                real_name = m.group(2)
+                stt.name_map[alias] = real_name
+                continue
+            elif stripped.startswith("*"):
+                # New directive encountered; exit NAME_MAP section
+                in_name_map = False
+                # Fall through to process this line as new directive
+            else:
+                # Skip non-* lines (blank or other content)
+                continue
+
+        # Inline *NAME_MAP entries: *NAME_MAP <alias> <real_name>
         m = re.match(r"\*NAME_MAP\s+(\S+)\s+(\S+)", stripped)
         if m:
             alias = m.group(1)
             real_name = m.group(2)
-            data.name_map[alias] = real_name
+            stt.name_map[alias] = real_name
             continue
 
-        # *PORTS <direction> [names...]
+        # *PORTS section header
+        if stripped == "*PORTS":
+            in_ports_sec = True
+            continue
+
+        # PORTS section data lines: *<idx> <direction>
+        if in_ports_sec:
+            if stripped.startswith("*") and not re.match(r"^\*\d+\s+", stripped):
+                # End of PORTS section (new directive, not *<idx>)
+                in_ports_sec = False
+                # Fall through to process this line as new directive
+            else:
+                # Port data line: *<idx> <direction>
+                # Per IEEE 1481, *NAME_MAP must precede *PORTS section
+                m = re.match(r"^\*(\d+)\s+([IOB])", stripped)
+                if m:
+                    alias = f"*{m.group(1)}"
+                    real_name = stt.name_map.get(alias, alias)
+                    if real_name not in stt.ports:
+                        stt.ports.append(real_name)
+                    continue
+                else:
+                    continue
+
+        # Inline *PORTS: *PORTS <direction> [names...]
         m = re.match(r"\*PORTS\s+(.+)", stripped)
-        if m:
-            # Ports line; extract port names (skip the direction keyword)
+        if m and not in_ports_sec:
             parts = m.group(1).split()
             if parts:
-                # Typically: *PORTS I port1 port2 ...  or  *PORTS O port1 ...
-                # We just collect names; direction is in parts[0]
-                for prt_nm in parts[1:]:
-                    if prt_nm not in data.ports:
-                        data.ports.append(prt_nm)
+                # Skip first part if it looks like a direction (I/O/B)
+                start_idx = 1 if parts[0] in ("I", "O", "B") else 0
+                for prt_nm in parts[start_idx:]:
+                    if prt_nm not in stt.ports:
+                        stt.ports.append(prt_nm)
             continue
 
         # *D_NET <name> <total_cap>
@@ -235,173 +309,214 @@ def parse_spef(path: str) -> SpefData:
             cap_str = m.group(2).strip()
 
             # Resolve name_map indirection
-            net_nm = data.name_map.get(net_nm_raw, net_nm_raw)
+            net_nm = stt.name_map.get(net_nm_raw, net_nm_raw)
 
-            # Parse capacitance (raw value; will scale by c_unit_scale later)
+            # Parse capacitance (raw value; will scale by c_unit_scale)
             try:
-                cap_raw = float(cap_str)
-                cap_val = cap_raw * data.c_unit_scale
+                float(cap_str)  # Validate but don't store (for future use)
             except ValueError:
                 _logger.warning(f"Could not parse capacitance '{cap_str}' for net '{net_nm}'")
-                cap_val = 0.0
 
-            crnt_net = SpefNet(name=net_nm, total_cap=cap_val, total_res=None)
-            data.nets[net_nm] = crnt_net
+            crnt_net = net_nm
+            net_pins[net_nm] = []
+            in_cap_section = False
+            in_res_section = False
             continue
 
         # *CONN (inside a *D_NET block)
+        # Format: *CONN *I <inst>:<pin> I/O *L <load> [*D <cell>]
+        #      or *CONN *P <port> I/O ...
         m = re.match(r"\*CONN\s+(.+)", stripped)
-        if m and crnt_net:
-            # Example: *CONN P inst_pin_ref  or  *CONN I inst pin
+        if m and crnt_net is not None:
             parts = m.group(1).split()
-            if len(parts) >= 1:
-                conn_name = parts[0]
-                # Store as pin reference (could be expanded later if needed)
-                if conn_name not in crnt_net.pins:
-                    crnt_net.pins.append(conn_name)
+            # First part is the key: *I (instance) or *P (port)
+            if parts and len(parts) >= 2:
+                # conn_type = parts[0]  # *I or *P (unused in current implementation)
+                conn_name = parts[1]  # inst:pin or port
+                net_pins[crnt_net].append(conn_name)
             continue
 
-        # *CAP <order> <value> [<node1> <node2> ...]
-        m = re.match(r"\*CAP\s+(\d+)\s+(.+)", stripped)
-        if m and crnt_net:
-            # Example: *CAP 1 1.5  (single capacitor, no nodes listed; value already in *D_NET)
-            _cap_idx = m.group(1)
-            cap_str = m.group(2).strip()
+        # *CAP section header
+        if stripped == "*CAP" and crnt_net is not None:
+            in_cap_section = True
+            in_res_section = False
+            continue
+
+        # CAP section data lines: <idx> <node_a> <node_b> <value>
+        if in_cap_section and crnt_net is not None:
+            if stripped.startswith("*"):
+                # End of CAP section
+                in_cap_section = False
+                # Fall through to process this line as new directive
+            else:
+                # CAP data line
+                m = re.match(r"^(\S+)\s+(\S+)\s+(\S+)\s+(.+)", stripped)
+                if m:
+                    cap_idx = m.group(1)
+                    node_a = stt.name_map.get(m.group(2), m.group(2))
+                    node_b = stt.name_map.get(m.group(3), m.group(3))
+                    cap_str = m.group(4).strip()
+
+                    try:
+                        cap_raw = float(cap_str)
+                        cap_val = cap_raw * stt.c_unit_scale
+                    except ValueError:
+                        _logger.warning(f"Could not parse capacitance '{cap_str}' in *CAP line")
+                        continue
+
+                    # Create C-prefix instance
+                    inst_name = f"C{cap_idx}"
+                    r_insts.append(
+                        Instance(
+                            name=inst_name,
+                            cell_type="C",
+                            nets=[node_a, node_b],
+                            parent_cell=stt.design_name or "top",
+                            params={"_value": f"{cap_val:g}"},
+                        )
+                    )
+                continue
+
+        # *CAP inline entry: *CAP <index> <node_a> <node_b> <value>
+        m = re.match(r"\*CAP\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)", stripped)
+        if m and crnt_net is not None and not in_cap_section:
+            cap_idx = m.group(1)
+            node_a = stt.name_map.get(m.group(2), m.group(2))
+            node_b = stt.name_map.get(m.group(3), m.group(3))
+            cap_str = m.group(4).strip()
+
             try:
                 cap_raw = float(cap_str)
-                cap_val = cap_raw * data.c_unit_scale
-                # Aggregate into total_cap (or replace if this is the full value)
-                # For simplicity: if value appears in CAP line, it's already counted
-                # in the *D_NET total_cap, so skip aggregation
-                crnt_net.num_caps += 1
+                cap_val = cap_raw * stt.c_unit_scale
             except ValueError:
                 _logger.warning(f"Could not parse capacitance '{cap_str}' in *CAP line")
+                continue
+
+            # Create C-prefix instance
+            inst_name = f"C{cap_idx}"
+            r_insts.append(
+                Instance(
+                    name=inst_name,
+                    cell_type="C",
+                    nets=[node_a, node_b],
+                    parent_cell=stt.design_name or "top",
+                    params={"_value": f"{cap_val:g}"},
+                )
+            )
             continue
 
-        # *RES <order> <value> <node1> <node2> [...]
-        m = re.match(r"\*RES\s+(\d+)\s+(.+)", stripped)
-        if m and crnt_net:
-            # Example: *RES 1 5.0  (single resistor)
-            _res_idx = m.group(1)
-            res_str = m.group(2).strip()
+        # *RES section header
+        if stripped == "*RES" and crnt_net is not None:
+            in_res_section = True
+            in_cap_section = False
+            continue
+
+        # RES section data lines: <idx> <node_a> <node_b> <value>
+        if in_res_section and crnt_net is not None:
+            if stripped.startswith("*"):
+                # End of RES section
+                in_res_section = False
+                # Fall through to process this line as new directive
+            else:
+                # RES data line
+                m = re.match(r"^(\S+)\s+(\S+)\s+(\S+)\s+(.+)", stripped)
+                if m:
+                    res_idx = m.group(1)
+                    node_a = stt.name_map.get(m.group(2), m.group(2))
+                    node_b = stt.name_map.get(m.group(3), m.group(3))
+                    res_str = m.group(4).strip()
+
+                    try:
+                        res_raw = float(res_str)
+                        res_val = res_raw * stt.r_unit_scale
+                    except ValueError:
+                        _logger.warning(f"Could not parse resistance '{res_str}' in *RES line")
+                        continue
+
+                    # Create R-prefix instance
+                    inst_name = f"R{res_idx}"
+                    r_insts.append(
+                        Instance(
+                            name=inst_name,
+                            cell_type="R",
+                            nets=[node_a, node_b],
+                            parent_cell=stt.design_name or "top",
+                            params={"_value": f"{res_val:g}"},
+                        )
+                    )
+                continue
+
+        # *RES inline entry: *RES <index> <node_a> <node_b> <value>
+        m = re.match(r"\*RES\s+(\S+)\s+(\S+)\s+(\S+)\s+(.+)", stripped)
+        if m and crnt_net is not None and not in_res_section:
+            res_idx = m.group(1)
+            node_a = stt.name_map.get(m.group(2), m.group(2))
+            node_b = stt.name_map.get(m.group(3), m.group(3))
+            res_str = m.group(4).strip()
+
             try:
                 res_raw = float(res_str)
-                res_val = res_raw * data.r_unit_scale
-                # Aggregate resistance (sum across all *RES lines)
-                if crnt_net.total_res is None:
-                    crnt_net.total_res = res_val
-                else:
-                    crnt_net.total_res += res_val
-                crnt_net.num_res += 1
+                res_val = res_raw * stt.r_unit_scale
             except ValueError:
                 _logger.warning(f"Could not parse resistance '{res_str}' in *RES line")
+                continue
+
+            # Create R-prefix instance
+            inst_name = f"R{res_idx}"
+            r_insts.append(
+                Instance(
+                    name=inst_name,
+                    cell_type="R",
+                    nets=[node_a, node_b],
+                    parent_cell=stt.design_name or "top",
+                    params={"_value": f"{res_val:g}"},
+                )
+            )
             continue
 
-        # *END (end of current net)
+        # *END (end of current net or section)
         if stripped == "*END":
             crnt_net = None
+            in_cap_section = False
+            in_res_section = False
             found_end = True
             continue
 
     # Validate that *END marker was found (IEEE 1481 requires it)
     if not found_end:
-        raise NetlistParseError(f"SPEF file '{path}' missing required *END marker (IEEE 1481 compliance)")
+        _logger.warning(f"SPEF file '{filepath}' missing *END marker (IEEE 1481 compliance)")
 
-    return data
+    # Build top-level SubcktDef from *DESIGN + *PORTS
+    design_name = stt.design_name or _derive_design_name_from_path(filepath)
+    top_def = SubcktDef(name=design_name, pins=stt.ports)
+
+    # All R/C/X instances belong to the top-level design
+    for inst in r_insts:
+        inst.parent_cell = design_name
+
+    sbckts: dict[str, SubcktDef] = {design_name: top_def}
+    return sbckts, r_insts, []
 
 
-################################################################################
-# SECTION: SPEF Overlay for Trace-Time Annotation
-# Description: Runtime lookup structure for annotating trace paths with SPEF data.
-################################################################################
-
-
-class SpefOverlay:
+def _derive_design_name_from_path(filepath: str) -> str:
     """
-    Thin wrapper around SpefData providing trace-time lookup with bus-bracket
-    normalization and SPF suffix stripping for net-name matching.
+    Derive a design name from a file path if *DESIGN is missing.
+
+    Extracts the base filename without extension.
+
+    Inputs:
+        filepath: Filesystem path to SPEF file
+
+    Outputs:
+        str — design name (basename without suffix)
     """
+    import os
 
-    def __init__(self, data: SpefData) -> None:
-        """
-        Build the runtime lookup structure; precompute bus-bracket variants
-        for tolerant net-name matching.
-
-        Inputs:
-            data: SpefData from parse_spef()
-
-        Outputs:
-            Initialized overlay with internal name index
-        """
-        self.data = data
-        # Precompute name variants: for each net, include the original name
-        # plus variants with [x] <-> <x> bracket styles
-        self.name_index: dict[str, SpefNet] = {}
-        for nm, spef_net in data.nets.items():
-            self.name_index[nm] = spef_net
-            # Add bracket variant: [ -> < and ] -> >
-            var1 = nm.replace("[", "<").replace("]", ">")
-            if var1 != nm:
-                self.name_index[var1] = spef_net
-            # Add bracket variant: < -> [ and > -> ]
-            var2 = nm.replace("<", "[").replace(">", "]")
-            if var2 != nm:
-                self.name_index[var2] = spef_net
-
-    def lookup(self, net_name: str) -> dict | None:
-        """
-        Return overlay metadata for a net, or None if not present.
-
-        Strategy:
-          1. Try exact match
-          2. Strip trailing ':pin' SPF suffix and retry
-          3. Try bracket variants
-          4. Return None if all miss
-
-        Inputs:
-            net_name: Net name from a TraceStep (post-walk)
-
-        Outputs:
-            {'C': float_farads, 'R': float_ohms_or_None, 'pins': [...]} or None
-        """
-        # Try exact match first
-        if net_name in self.name_index:
-            spef_net = self.name_index[net_name]
-            return {
-                "C": spef_net.total_cap,
-                "R": spef_net.total_res,
-                "pins": spef_net.pins,
-            }
-
-        # Try stripping SPF ':pin' suffix (e.g., 'inst/M1:G' -> 'inst/M1')
-        idx = net_name.rfind(":")
-        if idx > 0:
-            base_net = net_name[:idx]
-            if base_net in self.name_index:
-                spef_net = self.name_index[base_net]
-                return {
-                    "C": spef_net.total_cap,
-                    "R": spef_net.total_res,
-                    "pins": spef_net.pins,
-                }
-
-        # Try bracket variants
-        var1 = net_name.replace("[", "<").replace("]", ">")
-        if var1 != net_name and var1 in self.name_index:
-            spef_net = self.name_index[var1]
-            return {
-                "C": spef_net.total_cap,
-                "R": spef_net.total_res,
-                "pins": spef_net.pins,
-            }
-
-        var2 = net_name.replace("<", "[").replace(">", "]")
-        if var2 != net_name and var2 in self.name_index:
-            spef_net = self.name_index[var2]
-            return {
-                "C": spef_net.total_cap,
-                "R": spef_net.total_res,
-                "pins": spef_net.pins,
-            }
-
-        return None
+    basename = os.path.basename(filepath)
+    # Strip .gz if present
+    if basename.lower().endswith(".gz"):
+        basename = basename[:-3]
+    # Strip .spef extension
+    if basename.lower().endswith(".spef"):
+        basename = basename[:-5]
+    return basename or "top"
