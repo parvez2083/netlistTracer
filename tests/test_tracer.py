@@ -403,3 +403,194 @@ def test_per_net_trace_hierarchical(vendored_picorv32_v: str) -> None:
     assert isinstance(result, dict), "trace_net() should return a dict"
     # Verify dict is non-empty
     assert len(result) >= 0, "Result should be a valid dict"
+
+
+def test_tracer_no_self_loop_endpoint_from_mosfet_gate():
+    """Regression test for Bug 1: BFS self-loop endpoint.
+
+    When tracing from a MOSFET gate net that connects to multiple MOSFETs,
+    the BFS should NOT emit a self-loop where it walks UP and back DOWN to
+    emit the starting instance/pin as a fresh endpoint.
+
+    This test verifies that for every path, the start step's (cell, instance_name, pin)
+    does NOT appear again later in the path as an endpoint.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create inline SPICE deck with two X-MOSFETs sharing a gate net
+        deck_path = os.path.join(tmpdir, "test_self_loop.sp")
+        with open(deck_path, "w") as f:
+            f.write(".title Self-loop regression\n")
+            f.write(".subckt top g_shared\n")
+            f.write("XM1 d1 g_shared s1 b1 nch_model W=1u L=0.1u\n")
+            f.write("XM2 d2 g_shared s2 b2 nch_model W=1u L=0.1u\n")
+            f.write(".ends top\n")
+
+        parser = NetlistParser(deck_path)
+        tracer = BidirectionalTracer(parser)
+        paths = tracer.trace("XM1", "G")
+
+        # Verify no self-loop: the start step should not appear later as an endpoint
+        for path in paths:
+            if len(path) > 1:
+                start_step = path[0]
+                start_key = (start_step.cell, start_step.instance_name, start_step.pin_or_net)
+                later_keys = [(s.cell, s.instance_name, s.pin_or_net) for s in path[1:]]
+                assert start_key not in later_keys, (
+                    f"Self-loop detected: start {start_key} appears again in path. "
+                    f"Path: {format_path(path)}"
+                )
+
+        # Verify that XM2 IS reached as an endpoint (legitimate sibling)
+        found_xm2_endpoint = False
+        for path in paths:
+            for step in path:
+                if (
+                    step.cell == "nch_model"
+                    and step.instance_name == "XM2"
+                    and step.direction == "endpoint"
+                ):
+                    found_xm2_endpoint = True
+                    break
+        assert found_xm2_endpoint, (
+            f"Expected at least one path with XM2 as endpoint, but got: "
+            f"{[format_path(p) for p in paths]}"
+        )
+
+
+def test_tracer_lazy_spf_subnode_net_resolves():
+    """Regression test for Bug 2: lazy SPF placeholder materialization before validation.
+
+    When tracing a net that appears in an SPF cell's internal instances, the lazy SPF
+    should be materialized BEFORE the pin/net validation check in trace(), so that
+    instances_by_parent is populated and the net lookup succeeds.
+
+    This test uses Spectre+SPF format with dspf_include to trigger lazy registration.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPF file with parasitic subnodes accessible as internal instances
+        spf_file = os.path.join(tmpdir, "leaf.spf")
+        with open(spf_file, "w") as f:
+            f.write(".SUBCKT leaf_cell port_a port_b\n")
+            f.write("XR1 port_a foo:1 resistor\n")
+            f.write("XR2 foo:1 foo:2 resistor\n")
+            f.write("XR3 foo:2 port_b resistor\n")
+            f.write(".ENDS leaf_cell\n")
+
+        # Create Spectre top file with dspf_include directive
+        scs_file = os.path.join(tmpdir, "top.scs")
+        with open(scs_file, "w") as f:
+            f.write("simulator lang=spectre\n")
+            f.write("subckt top a b\n")
+            f.write("  x1 (a b) leaf_cell\n")
+            f.write("ends top\n")
+            f.write(f'dspf_include "{spf_file}"\n')
+
+        parser = NetlistParser(scs_file)
+        tracer = BidirectionalTracer(parser)
+
+        # Pre-trace sanity check: verify lazy placeholder was registered
+        assert "leaf_cell" in parser.pndg_spf_fls, (
+            "Test fixture failed to register lazy placeholder — fix is not actually exercised"
+        )
+
+        # Trace the parasitic subnode net 'foo:1'; this should succeed because
+        # materialization ensures instances_by_parent is populated before validation
+        paths = tracer.trace("leaf_cell", "foo:1")
+
+        # Verify that at least one path was found (proving the net exists)
+        assert isinstance(paths, list), "trace() should return a list"
+        assert len(paths) > 0, (
+            "trace('leaf_cell', 'foo:1') should find paths now that net validation "
+            "is done against materialized instances"
+        )
+
+        # Verify first step has correct pin_or_net
+        assert paths[0][0].pin_or_net == "foo:1", (
+            f"First path's first step should reference 'foo:1', got {paths[0][0].pin_or_net}"
+        )
+
+
+def test_tracer_lazy_spf_subnode_unknown_net_still_errors(capsys):
+    """Verify that after materialization, genuinely missing nets still error correctly.
+
+    This ensures the Bug 2 fix (materialization before validation) doesn't
+    accidentally make unknown nets succeed. Stderr should contain 'not found' message.
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPF file with parasitic subnodes
+        spf_file = os.path.join(tmpdir, "leaf.spf")
+        with open(spf_file, "w") as f:
+            f.write(".SUBCKT leaf_cell port_a port_b\n")
+            f.write("XR1 port_a foo:1 resistor\n")
+            f.write("XR2 foo:1 foo:2 resistor\n")
+            f.write(".ENDS leaf_cell\n")
+
+        # Create Spectre top file with dspf_include directive
+        scs_file = os.path.join(tmpdir, "top.scs")
+        with open(scs_file, "w") as f:
+            f.write("simulator lang=spectre\n")
+            f.write("subckt top a b\n")
+            f.write("  x1 (a b) leaf_cell\n")
+            f.write("ends top\n")
+            f.write(f'dspf_include "{spf_file}"\n')
+
+        parser = NetlistParser(scs_file)
+        tracer = BidirectionalTracer(parser)
+
+        # Pre-trace sanity check: verify lazy placeholder was registered
+        assert "leaf_cell" in parser.pndg_spf_fls, (
+            "Test fixture failed to register lazy placeholder — fix is not actually exercised"
+        )
+
+        # Trace a net that doesn't exist, even after materialization
+        paths = tracer.trace("leaf_cell", "totally_made_up_net_xyz")
+
+        # Should return empty list (no paths found for unknown net)
+        assert paths == [], (
+            "trace() with unknown net should return empty list even after materialization"
+        )
+
+        # Capture stderr and verify error message
+        captured = capsys.readouterr()
+        assert "not found" in captured.err, (
+            f"Expected 'not found' message in stderr, got: {captured.err}"
+        )
+
+
+def test_tracer_no_self_loop_descent_branch_unaffected():
+    """Verify that the Bug 1 fix (self-loop prevention) doesn't suppress legitimate sibling endpoints.
+
+    The endpoint-key guard compares by instance_name, so different instances
+    (even with the same cell_type and pin_label) should not be suppressed.
+
+    This test creates a shared gate net that both XM1 and XM2 connect to,
+    then verifies that both are found as endpoints (no suppression by instance_name check).
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create SPICE deck with two MOSFETs sharing a gate net
+        deck_path = os.path.join(tmpdir, "test_siblings.sp")
+        with open(deck_path, "w") as f:
+            f.write(".title Sibling endpoint test\n")
+            f.write(".subckt top g_shared\n")
+            f.write("XM1 d1 g_shared s1 b1 nch_model W=1u L=0.1u\n")
+            f.write("XM2 d2 g_shared s2 b2 nch_model W=1u L=0.1u\n")
+            f.write(".ends top\n")
+
+        parser = NetlistParser(deck_path)
+        tracer = BidirectionalTracer(parser)
+
+        # Trace from XM1.G on the shared gate
+        paths = tracer.trace("XM1", "G")
+
+        # Verify at least one path includes XM2.G as endpoint
+        # (different instance, so endpoint_key (nch_model, XM2, G) != start key)
+        found_xm2_endpoint = False
+        for path in paths:
+            for step in path:
+                if step.cell == "nch_model" and step.instance_name == "XM2":
+                    found_xm2_endpoint = True
+                    break
+        assert found_xm2_endpoint, (
+            f"Expected XM2 to be reachable as endpoint (different instance from XM1), "
+            f"but got paths: {[format_path(p) for p in paths]}"
+        )

@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-05-18
+
+### Fixed
+
+- **Tracer self-loop endpoint emission**: BFS lateral-walk endpoint branch in
+  `BidirectionalTracer` no longer re-emits the starting leaf terminal as an
+  endpoint when the trace walks up to a parent net and the parent's only
+  connection back is the same instance/pin. Endpoint emission now compares
+  by `(cell, instance_name, pin)` triple against every step on the path,
+  preventing the self-loop while preserving legitimate sibling endpoints
+  that share a pin label (e.g. two leaf devices with the same gate-net
+  connection).
+- **Lazy SPF placeholder materialized before net validation**: `trace()`
+  now triggers `_mtrl_if_pndg(start_cell)` before validating the start
+  net against `instances_by_parent`. Previously, querying a net in an SPF
+  cell registered via `dspf_include` (lazy placeholder) reported
+  "Net not found" because the placeholder body had not been parsed yet —
+  the existing materialization hooks inside the BFS never fired for the
+  initial validation. SPF subnode net forms (e.g. `signal:NNN`) now
+  resolve correctly on the first trace call.
+- **SystemVerilog module header package_import_declaration**: SV-2017 LRM
+  permits zero-or-more `import pkg::*;` (and `import pkg::IDENT;`) directives
+  between `module NAME` and the port-list `(`. The Verilog parser previously
+  treated the trailing `;` of the import as a forward-declaration terminator
+  and silently dropped the entire module. The fix strips package_import_
+  declarations from the inter-`module`-to-`(` text before applying the
+  forward-declaration heuristic.
+
 ## [0.6.0] - 2026-05-17
 
 ### Added

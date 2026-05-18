@@ -32,6 +32,7 @@ _RE_ENDMOD = re.compile(r"\bendmodule\b")
 _RE_ENDINTERFACE = re.compile(r"\bendinterface\b")
 _RE_ENDPRIMITIVE = re.compile(r"\bendprimitive\b")
 _RE_DEFPARAM = re.compile(r"\bdefparam\s+([\w\.]+)\.(\w+)\s*=\s*([^;]+);")
+_RE_PKG_IMPORT = re.compile(r"\bimport\s+\w+\s*::\s*(?:\*|\w+(?:\s*,\s*\w+)*)\s*;")
 
 
 def _get_primitive_types() -> set:
@@ -322,12 +323,20 @@ def _sv_parse_file(args: tuple[str, dict, set, dict]) -> list:
             mod_name = next_match.group(1)
             paren_open = raw.find("(", next_match.end())
             semi = raw.find(";", next_match.end())
-            if paren_open < 0 or (0 <= semi < paren_open):
+            # Skip forward-declaration form: module name; (no port list)
+            if paren_open < 0:
+                pos = max(semi + 1, next_match.end())
+                continue
+            # Strip package_import_declarations from text between module name and port list
+            between = raw[next_match.end() : paren_open]
+            between_clean = _RE_PKG_IMPORT.sub("", between)
+            # Check for malformed header: any non-import semicolon before port list
+            if ";" in between_clean:
                 pos = max(semi + 1, next_match.end())
                 continue
             param_text = ""
-            between = raw[next_match.end() : paren_open].strip()
-            if between.startswith("#"):
+            between_clean = between_clean.strip()
+            if between_clean.startswith("#"):
                 param_close = _sv_match_paren(raw, paren_open + 1)
                 if param_close < 0:
                     pos = next_match.end()

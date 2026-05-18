@@ -273,3 +273,9 @@ def synthetic_sv_interfaces_sv(fixtures_synthetic_dir):
 def synthetic_edif_features_edif(fixtures_synthetic_dir):
     """Path to consolidated edif_features.edif fixture."""
     return os.path.join(fixtures_synthetic_dir, "edif_features.edif")
+
+
+@pytest.fixture
+def synthetic_intf_pkg_header_sv(fixtures_synthetic_dir):
+    """Path to synthetic intf_pkg_header.sv fixture (module with package imports in header)."""
+    return os.path.join(fixtures_synthetic_dir, "intf_pkg_header.sv")

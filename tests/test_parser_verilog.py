@@ -991,3 +991,119 @@ class TestVerilogUDP:
         pins = NetlistParser.peek_pins(synthetic_udp_simple_v, "udp_xor")
         assert pins is not None, "peek_pins should find udp_xor"
         assert set(pins) == {"y", "a", "b"}, f"udp_xor pins should be {{y, a, b}}, got {set(pins)}"
+
+
+class TestVerilogModuleHeader:
+    """Tests for SystemVerilog module header parsing (package imports, forward declarations)."""
+
+    def test_parser_verilog_module_header_package_import(self, synthetic_intf_pkg_header_sv):
+        """Test parsing SV module with package_import_declaration(s) in header.
+
+        Per SV-2017 LRM, module headers can include zero-or-more package_import_declaration
+        statements between the module name and the port list. Previously, the `;` at the end
+        of `import pkg::*;` was mistaken for a forward-declaration terminator, silently dropping
+        such modules. This test verifies they now parse correctly with all ports intact.
+        """
+        parser = NetlistParser(synthetic_intf_pkg_header_sv)
+        assert parser.format == "verilog"
+        assert "pkg_import_mod" in parser.subckts, "Module with package imports should be parsed"
+        subckt = parser.subckts["pkg_import_mod"]
+        assert len(subckt.pins) == 4, (
+            f"pkg_import_mod should have 4 ports (clk, resetn, bus_if, done), got {len(subckt.pins)}"
+        )
+        expected_pins = {"clk", "resetn", "bus_if", "done"}
+        actual_pins = set(subckt.pin_to_pos.keys())
+        assert actual_pins == expected_pins, (
+            f"pkg_import_mod pins should be {expected_pins}, got {actual_pins}"
+        )
+
+    def test_parser_verilog_module_header_multiple_package_imports(self):
+        """Test parsing module with TWO consecutive package_import_declaration(s).
+
+        Verifies that the parser correctly strips multiple import directives from the
+        module header before checking for malformed syntax.
+        """
+        sv_code = """
+interface test_intf;
+    logic req;
+    modport responder (input req);
+endinterface
+
+module multi_import_test
+    import pkg_a::*;
+    import pkg_b::TYPE_B;
+(
+    input wire clk,
+    test_intf.responder intf_port,
+    output wire done
+);
+endmodule
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sv_file = os.path.join(tmpdir, "multi_import.sv")
+            with open(sv_file, "w") as f:
+                f.write(sv_code)
+            parser = NetlistParser(sv_file)
+            assert "multi_import_test" in parser.subckts, (
+                "Module with multiple imports should parse"
+            )
+            subckt = parser.subckts["multi_import_test"]
+            assert len(subckt.pins) == 3, (
+                f"multi_import_test should have 3 ports (clk, intf_port, done), got {len(subckt.pins)}"
+            )
+
+    def test_parser_verilog_module_forward_declaration_still_skipped(self):
+        """Test that forward declarations (module foo; with no body) still skip cleanly.
+
+        Forward declarations have no port list and no endmodule body. They should be skipped
+        during parsing without crashing.
+        """
+        sv_code = """
+module valid_module (input wire clk);
+endmodule
+
+module forward_decl_test;
+endmodule
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sv_file = os.path.join(tmpdir, "forward_decl.sv")
+            with open(sv_file, "w") as f:
+                f.write(sv_code)
+            # Parsing should not crash
+            parser = NetlistParser(sv_file)
+            # Forward declaration should either not appear or have empty pins
+            assert "valid_module" in parser.subckts, "valid_module should be parsed"
+            if "forward_decl_test" in parser.subckts:
+                assert len(parser.subckts["forward_decl_test"].pins) == 0, (
+                    "forward_decl_test should have no pins if present"
+                )
+
+    def test_parser_verilog_malformed_module_header_still_skipped(self):
+        """Test that malformed headers (with non-import ; before port list) skip cleanly.
+
+        A module like `module bar; garbage; (input x);` has a `;` that is NOT from an
+        import statement. The parser should recognize this as malformed and skip it,
+        without crashing and without creating a phantom module entry.
+        """
+        sv_code = """
+module valid_module (input wire clk);
+endmodule
+
+module malformed_header;
+garbage_token_here;
+(input wire x);
+endmodule
+"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sv_file = os.path.join(tmpdir, "malformed.sv")
+            with open(sv_file, "w") as f:
+                f.write(sv_code)
+            # Parsing should not crash
+            parser = NetlistParser(sv_file)
+            # Valid module should be present
+            assert "valid_module" in parser.subckts, "valid_module should be parsed"
+            # Malformed module should not be added to subckts (or present with empty pins)
+            if "malformed_header" in parser.subckts:
+                assert len(parser.subckts["malformed_header"].pins) == 0, (
+                    "malformed_header should have no pins if present"
+                )

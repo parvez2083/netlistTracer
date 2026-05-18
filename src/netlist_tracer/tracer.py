@@ -355,6 +355,12 @@ class BidirectionalTracer:
                 print(f"ERROR: Cell '{start_cell}' not found", file=sys.stderr)
                 continue
 
+            # Materialize lazy SPF placeholder before pin/net validation
+            self._mtrl_if_pndg(start_cell)
+            subckt = self.parser.subckts.get(start_cell)
+            if not subckt:
+                continue
+
             # Check if start_pin is a pin (normal case)
             is_pin = start_pin in subckt.pin_to_pos
 
@@ -679,6 +685,16 @@ class BidirectionalTracer:
                             )
                         else:
                             pin_label = curr_pin_name or f"{inst.cell_type}:{net_pos}"
+
+                        # Prevent self-loop endpoint emission: skip if this leaf terminal
+                        # already appears on the path (detected by comparing cell, instance_name,
+                        # and pin_label against all prior steps).
+                        endpoint_key = (inst.cell_type, inst.name, pin_label)
+                        if any(
+                            (s.cell, s.instance_name, s.pin_or_net) == endpoint_key for s in path
+                        ):
+                            continue
+
                         endpoint_step = TraceStep(
                             cell=inst.cell_type,
                             pin_or_net=pin_label,
