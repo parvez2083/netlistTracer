@@ -229,6 +229,7 @@ class TestSpectreSection:
         spec_smoke_path = os.environ.get("SPECTRE_SECTION_SMOKE_PATH")
         if not spec_smoke_path:
             import pytest
+
             pytest.skip("SPECTRE_SECTION_SMOKE_PATH not set; skipping user smoke test")
 
         # Parse the user's Spectre file
@@ -246,8 +247,7 @@ class TestSpectreSection:
             if smoke_cell in parser.subckts:
                 paths = tracer.trace(smoke_cell, smoke_pin)
                 assert len(paths) >= smoke_min, (
-                    f"Expected >= {smoke_min} paths after section/endsection fix, "
-                    f"got {len(paths)}"
+                    f"Expected >= {smoke_min} paths after section/endsection fix, got {len(paths)}"
                 )
 
 
@@ -269,13 +269,7 @@ class TestSubcktMergeNonEmptyWins:
             # Create a populated SPF body with resistance (creates aliases)
             pop_spf = os.path.join(tmpdir, "populated.spf")
             with open(pop_spf, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT FOO a b\n"
-                    "R1 a x 1k\n"
-                    "R2 x b 1k\n"
-                    ".ENDS FOO\n"
-                )
+                f.write("*|DSPF\n.SUBCKT FOO a b\nR1 a x 1k\nR2 x b 1k\n.ENDS FOO\n")
 
             # Create a mixed directory with both files
             parser = NetlistParser(tmpdir)
@@ -331,13 +325,7 @@ class TestSubcktMergeNonEmptyWins:
             # Populated SPF subckt (different body to distinguish)
             pop_spf = os.path.join(tmpdir, "pop.spf")
             with open(pop_spf, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT BAZ 1 2\n"
-                    "R_spf 1 int 250\n"
-                    "R_spf int 2 250\n"
-                    ".ENDS BAZ\n"
-                )
+                f.write("*|DSPF\n.SUBCKT BAZ 1 2\nR_spf 1 int 250\nR_spf int 2 250\n.ENDS BAZ\n")
 
             parser = NetlistParser(tmpdir)
             assert "BAZ" in parser.subckts
@@ -373,17 +361,14 @@ class TestSubcktMergeNonEmptyWins:
 
             pop_spf = os.path.join(tmpdir, "pop.spf")
             with open(pop_spf, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT ANNO a b\n"
-                    "R1 a b 1k\n"
-                    ".ENDS ANNO\n"
-                )
+                f.write("*|DSPF\n.SUBCKT ANNO a b\nR1 a b 1k\n.ENDS ANNO\n")
 
             _ = NetlistParser(tmpdir)  # Triggers parsing, which emits the log
             # Check that an INFO log was emitted mentioning back-annotation
             back_anno_logs = [
-                rec for rec in caplog.records if "Back-annotat" in rec.message and "ANNO" in rec.message
+                rec
+                for rec in caplog.records
+                if "Back-annotat" in rec.message and "ANNO" in rec.message
             ]
             assert len(back_anno_logs) > 0, (
                 f"Expected at least one back-annotation INFO log for ANNO; "
@@ -421,13 +406,7 @@ class TestSPFIncludeDispatch:
             # Create SPF file with populated body
             sub_spf = os.path.join(tmpdir, "sub.spf")
             with open(sub_spf, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT SPFSUB p n\n"
-                    "R1 p int 500\n"
-                    "R2 int n 500\n"
-                    ".ENDS SPFSUB\n"
-                )
+                f.write("*|DSPF\n.SUBCKT SPFSUB p n\nR1 p int 500\nR2 int n 500\n.ENDS SPFSUB\n")
 
             # Create Spectre file that includes the SPF
             main_scs = os.path.join(tmpdir, "main.scs")
@@ -479,12 +458,7 @@ class TestBackslashContinuationInDspfInclude:
             # Create an SPF file to be included
             spf_path = os.path.join(tmpdir, "continued.spf")
             with open(spf_path, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT CONT_SPF a b\n"
-                    "R1 a b 1k\n"
-                    ".ENDS CONT_SPF\n"
-                )
+                f.write("*|DSPF\n.SUBCKT CONT_SPF a b\nR1 a b 1k\n.ENDS CONT_SPF\n")
 
             # Create a Spectre file with backslash-continued dspf_include
             scs_path = os.path.join(tmpdir, "test.scs")
@@ -650,21 +624,11 @@ class TestSectionAwareDspfInclude:
             # Create two SPF files
             spf_a = os.path.join(tmpdir, "a.spf")
             with open(spf_a, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT CELLA p n\n"
-                    "R1 p n 1k\n"
-                    ".ENDS CELLA\n"
-                )
+                f.write("*|DSPF\n.SUBCKT CELLA p n\nR1 p n 1k\n.ENDS CELLA\n")
 
             spf_b = os.path.join(tmpdir, "b.spf")
             with open(spf_b, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT CELLB p n\n"
-                    "R2 p n 2k\n"
-                    ".ENDS CELLB\n"
-                )
+                f.write("*|DSPF\n.SUBCKT CELLB p n\nR2 p n 2k\n.ENDS CELLB\n")
 
             # Create child file with dspf_includes in different sections
             child_scs = os.path.join(tmpdir, "child.scs")
@@ -714,30 +678,15 @@ class TestSectionAwareDspfInclude:
             # Create 3 SPF files (one for each child .scs)
             spf_a = os.path.join(tmpdir, "cell_a.spf")
             with open(spf_a, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT CELL_A p n\n"
-                    "R1 p n 1k\n"
-                    ".ENDS CELL_A\n"
-                )
+                f.write("*|DSPF\n.SUBCKT CELL_A p n\nR1 p n 1k\n.ENDS CELL_A\n")
 
             spf_b = os.path.join(tmpdir, "cell_b.spf")
             with open(spf_b, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT CELL_B p n\n"
-                    "R2 p n 2k\n"
-                    ".ENDS CELL_B\n"
-                )
+                f.write("*|DSPF\n.SUBCKT CELL_B p n\nR2 p n 2k\n.ENDS CELL_B\n")
 
             spf_c = os.path.join(tmpdir, "cell_c.spf")
             with open(spf_c, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT CELL_C p n\n"
-                    "R3 p n 3k\n"
-                    ".ENDS CELL_C\n"
-                )
+                f.write("*|DSPF\n.SUBCKT CELL_C p n\nR3 p n 3k\n.ENDS CELL_C\n")
 
             # Create three child .scs files, each with section-gated dspf_includes
             child_a = os.path.join(tmpdir, "child_a.scs")
@@ -774,9 +723,7 @@ class TestSectionAwareDspfInclude:
             parser = NetlistParser(top_scs)
 
             # AC28: ALL three cells should be loaded (not just CELL_A from the first child)
-            assert "CELL_A" in parser.subckts, (
-                "CELL_A from child_a.scs should be loaded"
-            )
+            assert "CELL_A" in parser.subckts, "CELL_A from child_a.scs should be loaded"
             assert "CELL_B" in parser.subckts, (
                 "CELL_B from child_b.scs should be loaded (BUG #2 fix: was missing)"
             )
@@ -813,13 +760,7 @@ class TestSectionAwareDspfInclude:
             # Create SPF with back-annotated content
             spf_content = os.path.join(tmpdir, "spf_body.spf")
             with open(spf_content, "w") as f:
-                f.write(
-                    "*|DSPF\n"
-                    ".SUBCKT my_cell a b\n"
-                    "R1 a x 100k\n"
-                    "R2 x b 100k\n"
-                    ".ENDS my_cell\n"
-                )
+                f.write("*|DSPF\n.SUBCKT my_cell a b\nR1 a x 100k\nR2 x b 100k\n.ENDS my_cell\n")
 
             # Create a .scs file with section-gated dspf_include
             scs_file = os.path.join(tmpdir, "my_circuit.scs")
@@ -835,9 +776,7 @@ class TestSectionAwareDspfInclude:
             parser = NetlistParser(scs_file)
 
             # The my_cell subckt should be present with instances from the SPF body
-            assert "my_cell" in parser.subckts, (
-                "my_cell should be defined in the parsed .scs file"
-            )
+            assert "my_cell" in parser.subckts, "my_cell should be defined in the parsed .scs file"
 
             # Materialize pending SPF files for this test
             parser.mtrl_all_pndg()
@@ -869,11 +808,7 @@ class TestSectionAwareDspfInclude:
             # Create a gzipped DSPF file with populated body
             dspf_gz_path = os.path.join(tmpdir, "child.dspf.gz")
             dspf_content = (
-                "*|DSPF\n"
-                ".SUBCKT DSPF_GZ_CELL p n\n"
-                "R1 p int 500\n"
-                "R2 int n 500\n"
-                ".ENDS DSPF_GZ_CELL\n"
+                "*|DSPF\n.SUBCKT DSPF_GZ_CELL p n\nR1 p int 500\nR2 int n 500\n.ENDS DSPF_GZ_CELL\n"
             )
             with gzip.open(dspf_gz_path, "wt") as f:
                 f.write(dspf_content)

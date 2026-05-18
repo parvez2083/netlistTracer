@@ -502,5 +502,3 @@ def _parse_spectre_dspf_include_directive(line: str) -> Optional[str]:
     if match:
         return match.group(1)
     return None
-
-

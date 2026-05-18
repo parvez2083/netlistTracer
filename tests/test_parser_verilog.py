@@ -931,9 +931,7 @@ class TestVerilogUDP:
         parser = NetlistParser(synthetic_udp_simple_v)
         # udp_xor has ports: output y, input a, input b
         udp_xor = parser.subckts["udp_xor"]
-        assert len(udp_xor.pins) == 3, (
-            f"udp_xor should have 3 pins, got {len(udp_xor.pins)}"
-        )
+        assert len(udp_xor.pins) == 3, f"udp_xor should have 3 pins, got {len(udp_xor.pins)}"
         assert set(udp_xor.pins) == {"y", "a", "b"}, (
             f"udp_xor pins should be {{y, a, b}}, got {set(udp_xor.pins)}"
         )
@@ -985,18 +983,11 @@ class TestVerilogUDP:
         """Test file with multiple UDP definitions."""
         parser = NetlistParser(synthetic_udp_simple_v)
         # Count UDPs vs regular modules
-        udp_count = sum(
-            1 for name in parser.subckts.keys()
-            if name in {"udp_xor", "udp_buf"}
-        )
-        assert udp_count == 2, (
-            f"Should have 2 UDP definitions, got {udp_count}"
-        )
+        udp_count = sum(1 for name in parser.subckts.keys() if name in {"udp_xor", "udp_buf"})
+        assert udp_count == 2, f"Should have 2 UDP definitions, got {udp_count}"
 
     def test_udp_peek_pins(self, synthetic_udp_simple_v):
         """Test that peek_pins works on UDP definitions."""
         pins = NetlistParser.peek_pins(synthetic_udp_simple_v, "udp_xor")
         assert pins is not None, "peek_pins should find udp_xor"
-        assert set(pins) == {"y", "a", "b"}, (
-            f"udp_xor pins should be {{y, a, b}}, got {set(pins)}"
-        )
+        assert set(pins) == {"y", "a", "b"}, f"udp_xor pins should be {{y, a, b}}, got {set(pins)}"

@@ -42,7 +42,15 @@ def _score_content(content: str) -> dict[str, int]:
     Outputs:
         Dict mapping format name to accumulated score
     """
-    scores: dict[str, int] = {"edif": 0, "verilog": 0, "spectre": 0, "cdl": 0, "spice": 0, "spf": 0, "spef": 0}
+    scores: dict[str, int] = {
+        "edif": 0,
+        "verilog": 0,
+        "spectre": 0,
+        "cdl": 0,
+        "spice": 0,
+        "spf": 0,
+        "spef": 0,
+    }
 
     # EDIF: s-expression prefix is unmistakable
     if re.search(r"\(edif\b", content):

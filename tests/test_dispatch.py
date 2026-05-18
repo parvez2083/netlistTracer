@@ -227,7 +227,9 @@ class TestDispatchBackwardCompatibility:
     def test_single_file_verilog_byte_identical(self, synthetic_verilog_features_v: str) -> None:
         """Single Verilog file parse produces identical results as before."""
         parser = NetlistParser(synthetic_verilog_features_v)
-        assert "concat_alias" in parser.subckts, "concat_alias module should be in verilog_features.v"
+        assert "concat_alias" in parser.subckts, (
+            "concat_alias module should be in verilog_features.v"
+        )
 
         # Should have subckts (the fixture defines modules)
         assert len(parser.subckts) > 0

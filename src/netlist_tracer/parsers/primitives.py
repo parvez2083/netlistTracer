@@ -80,11 +80,11 @@ def _pins_by_terminal_count(n: int) -> list[str]:
         list[str] — pin labels in canonical order
     """
     if n == 2:
-        return ["A", "K"]              # diode-like
+        return ["A", "K"]  # diode-like
     if n == 3:
-        return ["D", "G", "S"]         # 3-term FET
+        return ["D", "G", "S"]  # 3-term FET
     if n == 4:
-        return ["D", "G", "S", "B"]    # 4-term FET
+        return ["D", "G", "S", "B"]  # 4-term FET
     return [str(i) for i in range(1, n + 1)]  # positional fallback
 
 

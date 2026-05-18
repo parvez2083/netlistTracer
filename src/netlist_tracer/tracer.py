@@ -56,7 +56,9 @@ def _is_primitive_shell(parser: NetlistParser, subckt: Any) -> bool:
         base_pin = re.sub(r"\[\d+(?::\d+)?\]$", "", pin)
         # Synthesized pins are 1-2 chars of uppercase letters/digits
         # Real Verilog port names are longer or contain lowercase
-        if not (1 <= len(base_pin) <= 2 and base_pin.isupper() and base_pin.replace("_", "").isalnum()):
+        if not (
+            1 <= len(base_pin) <= 2 and base_pin.isupper() and base_pin.replace("_", "").isalnum()
+        ):
             return False
 
     return True
@@ -442,9 +444,7 @@ class BidirectionalTracer:
         return [
             p
             for p in subckt.pins
-            if p != name
-            and _RE_BUS_INDEXED.search(p)
-            and _BUS_BRKT_RE.sub("", p) == name
+            if p != name and _RE_BUS_INDEXED.search(p) and _BUS_BRKT_RE.sub("", p) == name
         ]
 
     def expand_bus_base(self, subckt: Any, insts: list[Instance], name: str) -> list[str]:
@@ -472,9 +472,7 @@ class BidirectionalTracer:
         pin_matches = [
             p
             for p in subckt.pins
-            if p != name
-            and _RE_BUS_INDEXED.search(p)
-            and _BUS_BRKT_RE.sub("", p) == name
+            if p != name and _RE_BUS_INDEXED.search(p) and _BUS_BRKT_RE.sub("", p) == name
         ]
         if pin_matches:
             return pin_matches
@@ -494,10 +492,7 @@ class BidirectionalTracer:
 
         if name in net_bases:
             net_matches = [
-                net
-                for inst in insts
-                for net in inst.nets
-                if _BUS_BRKT_RE.sub("", net) == name
+                net for inst in insts for net in inst.nets if _BUS_BRKT_RE.sub("", net) == name
             ]
             return list(dict.fromkeys(net_matches))  # Dedupe while preserving order
 
@@ -615,7 +610,11 @@ class BidirectionalTracer:
                 child_subckt = self.parser.subckts.get(inst.cell_type)
 
                 # Hierarchical descent: if child_subckt exists, has a body, and pin index is valid
-                if child_subckt and not _is_primitive_shell(self.parser, child_subckt) and net_pos < len(child_subckt.pins):
+                if (
+                    child_subckt
+                    and not _is_primitive_shell(self.parser, child_subckt)
+                    and net_pos < len(child_subckt.pins)
+                ):
                     child_pin = child_subckt.pins[net_pos]
                     if (inst.cell_type, child_pin) not in path_cells:
                         new_stack_down = inst_stack + ((inst.name, curr_cell),)
@@ -626,9 +625,7 @@ class BidirectionalTracer:
                             instance_name=inst.name,
                             inst_stack=new_stack_down,
                         )
-                        queue.append(
-                            (inst.cell_type, child_pin, new_stack_down, path + [new_step])
-                        )
+                        queue.append((inst.cell_type, child_pin, new_stack_down, path + [new_step]))
 
                 # Lateral walk: leaf primitive (no SubcktDef) or empty primitive shell
                 # Only R and L allow galvanic thru-walk; others are endpoints
@@ -675,7 +672,11 @@ class BidirectionalTracer:
                         # sees where the trace terminated; do not walk further.
                         # Prefer synthesized pin label if child_subckt is a primitive shell.
                         if child_subckt and _is_primitive_shell(self.parser, child_subckt):
-                            pin_label = child_subckt.pins[net_pos] if net_pos < len(child_subckt.pins) else curr_pin_name or f"{inst.cell_type}:{net_pos}"
+                            pin_label = (
+                                child_subckt.pins[net_pos]
+                                if net_pos < len(child_subckt.pins)
+                                else curr_pin_name or f"{inst.cell_type}:{net_pos}"
+                            )
                         else:
                             pin_label = curr_pin_name or f"{inst.cell_type}:{net_pos}"
                         endpoint_step = TraceStep(

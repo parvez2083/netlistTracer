@@ -18,7 +18,9 @@ _logger = get_logger(__name__)
 def _collect_subckt_pins_from_handle(
     fh: Any,  # file handle (gzip or regular, text mode)
     target_cell: str | None,
-) -> Any:  # Returns list[str] | None if target_cell, list[tuple[str, list[str]]] if target_cell is None
+) -> (
+    Any
+):  # Returns list[str] | None if target_cell, list[tuple[str, list[str]]] if target_cell is None
     """Collect .SUBCKT pin declarations from file handle.
 
     Scans for '.SUBCKT <name> <pins...>' lines, handling '+' continuations.

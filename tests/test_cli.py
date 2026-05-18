@@ -42,8 +42,12 @@ def test_parse_plus_args_incdir() -> None:
 
 def test_parse_plus_args_mixed_with_dash_args() -> None:
     """Test that + and - flags are separated: +flags → extracted, -flags → filtered."""
-    filtered, defines, incdirs = _parse_plus_args(["-defines", "A", "+define+B", "-include", "/x", "+incdir+/y"])
-    assert filtered == ["-defines", "A", "-include", "/x"], f"Expected ['-defines', 'A', '-include', '/x'], got {filtered}"
+    filtered, defines, incdirs = _parse_plus_args(
+        ["-defines", "A", "+define+B", "-include", "/x", "+incdir+/y"]
+    )
+    assert filtered == ["-defines", "A", "-include", "/x"], (
+        f"Expected ['-defines', 'A', '-include', '/x'], got {filtered}"
+    )
     assert defines == ["B"], f"Expected ['B'], got {defines}"
     assert incdirs == ["/y"], f"Expected ['/y'], got {incdirs}"
 
@@ -60,8 +64,12 @@ def test_parse_plus_args_multiple() -> None:
 
 def test_parse_plus_args_passthrough_other() -> None:
     """Test that non-+flag arguments pass through to filtered list."""
-    filtered, defines, incdirs = _parse_plus_args(["-netlist", "file.v", "-cell", "top", "+define+TEST"])
-    assert filtered == ["-netlist", "file.v", "-cell", "top"], f"Expected passthrough of non-+flags, got {filtered}"
+    filtered, defines, incdirs = _parse_plus_args(
+        ["-netlist", "file.v", "-cell", "top", "+define+TEST"]
+    )
+    assert filtered == ["-netlist", "file.v", "-cell", "top"], (
+        f"Expected passthrough of non-+flags, got {filtered}"
+    )
     assert defines == ["TEST"], f"Expected ['TEST'], got {defines}"
     assert incdirs == [], f"Expected empty incdirs, got {incdirs}"
 
@@ -588,7 +596,9 @@ def test_cli_pin_flag_rejected(synthetic_spice_basic_sp: str) -> None:
         text=True,
     )
     assert result.returncode == 2, "Should fail with argparse error (exit code 2)"
-    assert "unrecognized arguments" in result.stderr, "Error message should mention unrecognized -pin flag"
+    assert "unrecognized arguments" in result.stderr, (
+        "Error message should mention unrecognized -pin flag"
+    )
 
 
 def test_cli_net_mode_requires_cell(synthetic_spice_basic_sp: str) -> None:

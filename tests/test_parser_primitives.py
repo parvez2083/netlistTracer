@@ -87,7 +87,9 @@ def test_derive_pins_no_annotations_uses_terminal_count():
     """Test AC36: when no SPF :pin annotations present, use terminal-count fallback."""
     # Instances with NO :pin annotations (pure SPICE, not SPF)
     inst1 = Instance(name="M1", cell_type="nch_model", nets=["d", "g", "s", "b"], parent_cell="top")
-    inst2 = Instance(name="M2", cell_type="nch_model", nets=["d2", "g2", "s2", "b2"], parent_cell="top")
+    inst2 = Instance(
+        name="M2", cell_type="nch_model", nets=["d2", "g2", "s2", "b2"], parent_cell="top"
+    )
 
     pins = _derive_pins_from_instances([inst1, inst2], 4)
     # No annotations, so should use terminal-count fallback: ['D', 'G', 'S', 'B']
@@ -97,8 +99,12 @@ def test_derive_pins_no_annotations_uses_terminal_count():
 def test_derive_pins_mixed_annotations():
     """Test AC36: mix of annotated and unannotated positions."""
     # Create instances with partial :pin annotations
-    inst1 = Instance(name="Xblk1/M_n1", cell_type="nmos_model",
-                     nets=["blk1/M_n1:D", "G_net", "S_net", "B_net"], parent_cell="top")
+    inst1 = Instance(
+        name="Xblk1/M_n1",
+        cell_type="nmos_model",
+        nets=["blk1/M_n1:D", "G_net", "S_net", "B_net"],
+        parent_cell="top",
+    )
 
     pins = _derive_pins_from_instances([inst1], 4)
     # Position 0: matches "blk1/M_n1:D" -> extract "D"
@@ -112,10 +118,10 @@ def test_derive_pins_mixed_annotations():
 def test_primitive_synthesis_spf_mosfet(synthetic_primitive_mosfet_spf):
     """Test primitive synthesis on an SPF with MOSFET primitives (AC34, AC36)."""
     # Parse the SPF fixture with real MOSFET primitives
-    parser = NetlistParser(synthetic_primitive_mosfet_spf, format='spf')
+    parser = NetlistParser(synthetic_primitive_mosfet_spf, format="spf")
     # After parsing, the MOSFET cell_type should have been synthesized
-    assert 'nmos_model' in parser.subckts, "MOSFET cell_type not synthesized"
-    sub = parser.subckts['nmos_model']
+    assert "nmos_model" in parser.subckts, "MOSFET cell_type not synthesized"
+    sub = parser.subckts["nmos_model"]
     # AC36: Check that pins are derived from SPF :pin annotations or positional fallback
     # Expected pins from AC36 extraction (with fallback)
     assert len(sub.pins) == 4, f"Expected 4 pins, got {len(sub.pins)}"
@@ -164,13 +170,14 @@ def test_primitive_synthesis_verilog_no_op(vendored_picorv32_v):
     assert initial_subckt_count > 0, "picorv32 should have subckts"
     # Confirm no Verilog module names were synthesized as primitives
     # by checking that none are single-character SPICE device names
-    spice_primitive_names = {'M', 'D', 'Q', 'J', 'R', 'C', 'L', 'V', 'I', 'K'}
+    spice_primitive_names = {"M", "D", "Q", "J", "R", "C", "L", "V", "I", "K"}
     synthetic_primitives = [
-        name for name in parser.subckts.keys()
-        if name.upper() in spice_primitive_names
+        name for name in parser.subckts.keys() if name.upper() in spice_primitive_names
     ]
     # Should be zero (Verilog has no SPICE primitives)
-    assert len(synthetic_primitives) == 0, f"Found SPICE primitives in Verilog: {synthetic_primitives}"
+    assert len(synthetic_primitives) == 0, (
+        f"Found SPICE primitives in Verilog: {synthetic_primitives}"
+    )
 
 
 def test_primitive_leaf_name_extraction():
@@ -189,7 +196,9 @@ Xtop/Isub/M1 d_net g_net s_net b_net nmos_model W=1u L=0.1u
     try:
         parser = NetlistParser(temp_file, format="spf")
         # The nmos_model should be synthesized (M prefix in leaf M1)
-        assert "nmos_model" in parser.subckts, "nmos_model should be synthesized (AC29 leaf extraction)"
+        assert "nmos_model" in parser.subckts, (
+            "nmos_model should be synthesized (AC29 leaf extraction)"
+        )
         sub = parser.subckts["nmos_model"]
         # Should have 4 pins (AC36 extraction or fallback)
         assert len(sub.pins) == 4, f"Expected 4 pins, got {len(sub.pins)}"

@@ -559,7 +559,9 @@ def test_spef_section_ports_pins_resolved():
         assert "mycircuit" in sbckts
         mycircuit = sbckts["mycircuit"]
         # Ports should be resolved to real names via NAME_MAP, not empty or direction markers
-        assert mycircuit.pins == ["vin", "vout"], f"Expected pins ['vin', 'vout'], got {mycircuit.pins}"
+        assert mycircuit.pins == ["vin", "vout"], (
+            f"Expected pins ['vin', 'vout'], got {mycircuit.pins}"
+        )
         assert mycircuit.pin_to_pos["vin"] == 0
         assert mycircuit.pin_to_pos["vout"] == 1
     finally:

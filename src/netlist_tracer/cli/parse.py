@@ -42,7 +42,9 @@ def _parse_plus_args(argv: list[str]) -> tuple[list[str], list[str], list[str]]:
             if "=" in dfn_part:
                 macro_nm = dfn_part.split("=")[0]
                 val_part = dfn_part.split("=", 1)[1]
-                _logger.debug(f"Macro {macro_nm} has value {val_part}; value-form defines not supported, registering bare name")
+                _logger.debug(
+                    f"Macro {macro_nm} has value {val_part}; value-form defines not supported, registering bare name"
+                )
             else:
                 macro_nm = dfn_part
             if macro_nm:
@@ -70,7 +72,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Netlist Parser - Parse and export to JSON",
         epilog="Preprocessor defines: Use +define+MACRO[=VAL] (Verilog tool-style). "
-               "Include paths: Use +incdir+PATH (Verilog tool-style, repeatable)."
+        "Include paths: Use +incdir+PATH (Verilog tool-style, repeatable).",
     )
     parser.add_argument("-netlist", required=True, help="Path to netlist file or directory")
     parser.add_argument("-output", required=True, help="Output JSON file path")

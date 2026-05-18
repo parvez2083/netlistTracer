@@ -49,7 +49,9 @@ def _parse_plus_args(argv: list[str]) -> tuple[list[str], list[str], list[str]]:
             if "=" in dfn_part:
                 macro_nm = dfn_part.split("=")[0]
                 val_part = dfn_part.split("=", 1)[1]
-                _logger.debug(f"Macro {macro_nm} has value {val_part}; value-form defines not supported, registering bare name")
+                _logger.debug(
+                    f"Macro {macro_nm} has value {val_part}; value-form defines not supported, registering bare name"
+                )
             else:
                 macro_nm = dfn_part
             if macro_nm:
@@ -90,14 +92,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Bidirectional Hierarchical Netlist Tracer",
         epilog="Preprocessor defines: Use +define+MACRO[=VAL] (Verilog tool-style). "
-               "Include paths: Use +incdir+PATH (Verilog tool-style, repeatable)."
+        "Include paths: Use +incdir+PATH (Verilog tool-style, repeatable).",
     )
     parser.add_argument(
         "-netlist", required=True, help="Path to netlist file or directory of .sv/.v files"
     )
-    parser.add_argument(
-        "-cell", required=True, help="Start cell or instance name (required)"
-    )
+    parser.add_argument("-cell", required=True, help="Start cell or instance name (required)")
     parser.add_argument(
         "-net",
         action="append",
@@ -181,7 +181,11 @@ def main() -> int:
             for net_name in nets:
                 net_base = re.sub(r"\[\d+\]$|<\d+>$", "", net_name)
                 is_indexed = net_name != net_base
-                if net_name in known_sigs or net_name in bus_bss or (is_indexed and net_base in known_sigs):
+                if (
+                    net_name in known_sigs
+                    or net_name in bus_bss
+                    or (is_indexed and net_base in known_sigs)
+                ):
                     continue
                 msng.append(net_name)
 
@@ -257,13 +261,18 @@ def main() -> int:
     # Output in requested format
     if otpt_fmt == "json":
         return _output_json(
-            nl_parser, start_name, target_name, args.max_depth, results, mode,
-            otpt_fh=args.output
+            nl_parser, start_name, target_name, args.max_depth, results, mode, otpt_fh=args.output
         )
     else:
         return _output_text(
-            nl_parser, tracer, start_name, target_name, results, used_omit_mode, mode,
-            otpt_fh=args.output
+            nl_parser,
+            tracer,
+            start_name,
+            target_name,
+            results,
+            used_omit_mode,
+            mode,
+            otpt_fh=args.output,
         )
 
 
@@ -290,11 +299,15 @@ def _output_text(
         close_after = True
 
     try:
+
         def _print_match(cell_type: str, chain: tuple[tuple[str, str], ...] | None) -> None:
             if chain:
                 leaf_inst, leaf_parent = chain[-1]
                 if len(chain) == 1:
-                    print(f"  -> instance {leaf_inst} of {cell_type} (in {leaf_parent})", file=out_handle)
+                    print(
+                        f"  -> instance {leaf_inst} of {cell_type} (in {leaf_parent})",
+                        file=out_handle,
+                    )
                 else:
                     hier = ".".join(c[0] for c in chain)
                     print(f"  -> instance {hier} of {cell_type}", file=out_handle)
@@ -362,14 +375,14 @@ def _output_text(
             print(
                 "Format: <CELL>|<HierarchicalInstanceName>|<PIN>   "
                 "where HierarchicalInstanceName = <inst1>/<inst2>/.../<CELL_INST>",
-                file=out_handle
+                file=out_handle,
             )
             print(
                 "        <CELL>|<internal>|<NET>   for the topmost CELL's pin "
                 "(same as NET) connecting to a subblock pin, OR a local "
                 "maxima in the path where 2 subblock pins are connected by "
                 "a NET inside the CELL\n",
-                file=out_handle
+                file=out_handle,
             )
             for i, (_path, sig) in enumerate(unique_paths, 1):
                 print(f"Path {i}: {sig}", file=out_handle)
@@ -378,22 +391,26 @@ def _output_text(
             # Multi-pin output: sectioned format
             num_pins = len(results)
             if target_name:
-                print(f"\nTracing: {start_name}.<{num_pins} pins> -> {target_name}", file=out_handle)
+                print(
+                    f"\nTracing: {start_name}.<{num_pins} pins> -> {target_name}", file=out_handle
+                )
             else:
-                print(f"\nTracing: {start_name}.<{num_pins} pins> -> all endpoints", file=out_handle)
+                print(
+                    f"\nTracing: {start_name}.<{num_pins} pins> -> all endpoints", file=out_handle
+                )
 
             # Print format explanation once
             print(
                 "\nFormat: <CELL>|<HierarchicalInstanceName>|<PIN>   "
                 "where HierarchicalInstanceName = <inst1>/<inst2>/.../<CELL_INST>",
-                file=out_handle
+                file=out_handle,
             )
             print(
                 "        <CELL>|<internal>|<NET>   for the topmost CELL's pin "
                 "(same as NET) connecting to a subblock pin, OR a local "
                 "maxima in the path where 2 subblock pins are connected by "
                 "a NET inside the CELL\n",
-                file=out_handle
+                file=out_handle,
             )
 
             for pin_name in sorted(results.keys()):

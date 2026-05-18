@@ -191,7 +191,7 @@ def parse_spef(
         # *DESIGN <name>
         m = re.match(r"\*DESIGN\s+(\S+)", stripped)
         if m:
-            stt.design_name = m.group(1).strip('\'"')
+            stt.design_name = m.group(1).strip("'\"")
             continue
 
         # *DIVIDER <char>

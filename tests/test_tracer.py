@@ -361,8 +361,9 @@ def test_per_net_trace_cell_filter(synthetic_spice_basic_sp: str) -> None:
     # All result keys should start with the filtered cell name
     for key in result.keys():
         cell_part = key.split(":")[0]
-        assert cell_part == first_subckt, \
+        assert cell_part == first_subckt, (
             f"Result key '{key}' should start with filtered cell '{first_subckt}'"
+        )
 
 
 def test_per_net_trace_hierarchical(vendored_picorv32_v: str) -> None:

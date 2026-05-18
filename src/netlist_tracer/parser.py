@@ -77,6 +77,7 @@ class NetlistParser:
             list[str] of candidate internal net names if cell found, None otherwise
         """
         from netlist_tracer.parsers.peek import peek_nets as _pk_nets
+
         return _pk_nets(flpth, cell, fmt=fmt)
 
     def __init__(
@@ -524,9 +525,14 @@ class NetlistParser:
                             fmt = detect_format([spf_pth])
                             if fmt == "spef":
                                 from netlist_tracer.parsers.spef import parse_spef
-                                sbckts, insts, gbl_nets = parse_spef(spf_pth, include_paths=self.include_paths)
+
+                                sbckts, insts, gbl_nets = parse_spef(
+                                    spf_pth, include_paths=self.include_paths
+                                )
                             else:
-                                sbckts, insts, gbl_nets = parse_spf(spf_pth, include_paths=self.include_paths)
+                                sbckts, insts, gbl_nets = parse_spf(
+                                    spf_pth, include_paths=self.include_paths
+                                )
                             # Group by format (spf or spef)
                             spf_fmt = "spef" if fmt == "spef" else "spf"
                             if spf_fmt not in spf_rslt:
@@ -676,6 +682,7 @@ class NetlistParser:
             # Dispatch to correct parser
             if fmt == "spef":
                 from netlist_tracer.parsers.spef import parse_spef
+
                 sbckts_spf, insts_spf, _ = parse_spef(spf_pth, include_paths=self.include_paths)
             else:
                 # Default to SPF parser for .spf, .dspf, or unknown
@@ -693,10 +700,14 @@ class NetlistParser:
                 cnt += 1
             else:
                 # Collision: check if existing is empty (Spectre shell)
-                has_inst = any(i.parent_cell == sbckt_nm for i in self.instances_by_parent.get(sbckt_nm, []))
+                has_inst = any(
+                    i.parent_cell == sbckt_nm for i in self.instances_by_parent.get(sbckt_nm, [])
+                )
                 if not has_inst:
                     # Empty: replace with populated SPF/SPEF body
-                    _logger.info(f"Back-annotating '{sbckt_nm}': empty shell -> populated SPF/SPEF body")
+                    _logger.info(
+                        f"Back-annotating '{sbckt_nm}': empty shell -> populated SPF/SPEF body"
+                    )
                     self.subckts[sbckt_nm] = sbckt_spf
                     cnt += 1
 
@@ -724,7 +735,7 @@ class NetlistParser:
             int — total subckts materialized across all files
         """
         # Guard: if fields don't exist (e.g., synthetic parser), no pending
-        if not hasattr(self, 'pndg_spf_fls'):
+        if not hasattr(self, "pndg_spf_fls"):
             return 0
 
         ttl = 0
@@ -1029,13 +1040,17 @@ class NetlistParser:
             fh.write(",")
 
             # Aliases: write if any
-            aliases_out = {name: dict(sub.aliases) for name, sub in self.subckts.items() if sub.aliases}
+            aliases_out = {
+                name: dict(sub.aliases) for name, sub in self.subckts.items() if sub.aliases
+            }
             fh.write(json.dumps("aliases", separators=(",", ":")))
             fh.write(":")
             fh.write(json.dumps(aliases_out, separators=(",", ":")))
 
             # Subckt params: write if any
-            sbckt_prms = {name: dict(sub.params) for name, sub in self.subckts.items() if sub.params}
+            sbckt_prms = {
+                name: dict(sub.params) for name, sub in self.subckts.items() if sub.params
+            }
             if sbckt_prms:
                 fh.write(",")
                 fh.write(json.dumps("subckt_params", separators=(",", ":")))
