@@ -303,7 +303,7 @@ XI0 a b c d nch_mac L=1u W=0.5u
             f.write(
                 """*|DSPF 1.0
 .SUBCKT TEST a b c d
-XI0 a:D b:G c:S d nch_ulvt_mac L=0.003u nfin=2 $x=0.864 $y=0.245 $angle=90
+XI0 a:D b:G c:S d nmos_model L=0.003u nfin=2 $x=0.864 $y=0.245 $angle=90
 .ENDS TEST
 """
             )
@@ -314,7 +314,7 @@ XI0 a:D b:G c:S d nch_ulvt_mac L=0.003u nfin=2 $x=0.864 $y=0.245 $angle=90
             assert len(insts) == 1
             inst = insts[0]
             assert inst.name == "XI0"
-            assert inst.cell_type == "nch_ulvt_mac"
+            assert inst.cell_type == "nmos_model"
             # Letter terminals should be preserved
             assert inst.nets == ["a:D", "b:G", "c:S", "d"]
             assert inst.params.get("L") == "0.003u"

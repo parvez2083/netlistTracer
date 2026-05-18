@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "netlist-tracer"
-version = "0.5.0"
+version = "0.6.0"
 description = "Multi-format netlist parser and bidirectional signal tracer (Verilog/SystemVerilog, SPICE/CDL, Spectre, SPF/DSPF, EDIF)."
 readme = "README.md"
 license = { text = "MIT" }

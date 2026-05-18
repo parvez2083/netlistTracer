@@ -85,28 +85,37 @@ Notation:
 ### `netlist-tracer` — hierarchical signal tracing
 
 ```
-netlist-tracer -netlist <file|dir> -cell <cell> [-pin <pin>] [-target <cell>] [-max_depth <n>] [-trace_format <fmt>] [-defines <csv>] [-include <dir>]
+netlist-tracer -netlist <file|dir> -cell <cell> [-net <net>] [-target <cell>] [-max_depth <n>] [-output <file>] [+define+MACRO] [+incdir+PATH] [-debug]
 ```
 
 | Option | Description |
 |--------|-------------|
-| `-netlist` | Path to netlist file or Verilog directory |
-| `-format` | Explicit format specification: `spice`, `cdl`, `spectre`, `spf`, `verilog`, `edif`, or `auto` (default). Overrides auto-detection. |
-| `-include` | Search path for unresolved include directives. Searched for `.include`, `.inc`, `.lib`, and Spectre `include` directives. Repeatable. |
-| `-cell` | Starting cell or instance name |
-| `-pin` | Pin name(s), BIT-LEVEL form (e.g. `data[3]`). Comma-separated or repeated flag. Omit to trace all bit-level pins of cell. |
-| `-target` | Optional target cell (traces to all endpoints if omitted) |
-| `-max_depth` | Limit path depth (useful for supply nets) |
-| `-trace_format` | Output format: `text` (default) or `json` |
-| `-defines` | Comma-separated preprocessor defines (Verilog/SV only) |
+| `-netlist` | Path to netlist file or Verilog directory (required) |
+| `-cell` | Starting cell or instance name (required) |
+| `-net` | Signal name(s) to trace: pin name, internal net name, or bus base name (expands to all indexed bits). Comma-separated or repeated flag. Omit to trace every bit-level pin of cell. |
+| `-target` | Optional target cell name (traces to all endpoints if omitted) |
+| `-max_depth` | Cap each path to start + max_depth more nodes (useful for supply nets) |
+| `-output` | Output file path. Format inferred from extension: `.json` (JSON output), other (text output). Omit for text to stdout. |
+| `+define+MACRO` | Preprocessor define (Verilog tool-style, repeatable). Format: `+define+MACRO` or `+define+MACRO=VAL` |
+| `+incdir+PATH` | Include search path (Verilog tool-style, repeatable) |
+| `-debug` | Enable DEBUG-level logging (default: INFO level) |
 
 ### `netlist-parser` — build and cache JSON
 
 ```
-netlist-parser -netlist <file|dir> -output <file.json>
+netlist-parser -netlist <file|dir> -output <file.json> [-topcell <cell>] [+define+MACRO] [+incdir+PATH] [-debug]
 ```
 
 Serializes a parsed netlist to JSON for fast subsequent loading.
+
+| Option | Description |
+|--------|-------------|
+| `-netlist` | Path to netlist file or directory (required) |
+| `-output` | Output JSON file path (required) |
+| `-topcell` | Top-level cell name (optional) |
+| `+define+MACRO` | Preprocessor define (Verilog tool-style, repeatable) |
+| `+incdir+PATH` | Include search path (Verilog tool-style, repeatable) |
+| `-debug` | Enable DEBUG-level logging (default: INFO level) |
 
 ## Library API
 
@@ -157,19 +166,19 @@ topCell|<internal>|pin0 -- Cell1|X1|pin1 -- Cell11|X1/X11|pin11
 
 Merge `assign` alias pairs into a subcircuit definition using union-find, preserving port names as canonical roots.
 
-## Pin tracing forms
+## Signal tracing forms
 
-`-pin` accepts three equivalent forms; each produces per-bit trace sections in the output:
+`-net` accepts multiple equivalent forms; each produces per-bit trace sections in the output:
 
 | Form | Example | Effect |
 |------|---------|--------|
-| Single pin | `-pin clk` | Trace one pin |
-| Comma-separated | `-pin clk,resetn,mem_addr[0]` | Trace each listed pin |
-| Repeated flag | `-pin clk -pin resetn` | Same as comma-separated |
-| Bare bus name | `-pin mem_addr` | Expand to all `mem_addr[0]..mem_addr[N]` bits as separate sections |
-| Omitted | (no `-pin`) | Trace every bit-level pin in the cell |
+| Single signal | `-net clk` | Trace one signal (pin or net) |
+| Comma-separated | `-net clk,resetn,mem_addr[0]` | Trace each listed signal |
+| Repeated flag | `-net clk -net resetn` | Same as comma-separated |
+| Bare bus name | `-net mem_addr` | Expand to all `mem_addr[0]..mem_addr[N]` bits as separate sections |
+| Omitted | (no `-net`) | Trace every bit-level pin in the cell |
 
-Unknown pin names (typos, names that don't exist as a pin or as a bus base) error with `ERROR: Pin '...' not found in cell '...'` and exit non-zero. The error includes a `Did you mean: [...]` suggestion list.
+Unknown signal names (typos, names that don't exist as a pin or as a net) error with `ERROR: Signal '...' not found in cell '...'` and exit non-zero. The error includes a `Did you mean: [...]` suggestion list.
 
 ## File Format Support
 

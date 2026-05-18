@@ -64,8 +64,6 @@ def main() -> int:
     Returns:
         Exit code (0 for success, 1 for error).
     """
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     # Parse +define+ / +incdir+ Verilog tool-style flags before argparse
     filtered_argv, plus_defines, plus_incdirs = _parse_plus_args(sys.argv[1:])
 
@@ -77,7 +75,16 @@ def main() -> int:
     parser.add_argument("-netlist", required=True, help="Path to netlist file or directory")
     parser.add_argument("-output", required=True, help="Output JSON file path")
     parser.add_argument("-topcell", default=None, help="Top-level cell name (optional)")
+    parser.add_argument(
+        "-debug",
+        action="store_true",
+        help="Enable DEBUG-level logging (default: INFO level).",
+    )
     args = parser.parse_args(filtered_argv)
+
+    # Setup logging after argument parsing
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=log_level, format="%(message)s")
 
     # Use defines from +define+ flags
     user_defines = set(plus_defines) if plus_defines else None

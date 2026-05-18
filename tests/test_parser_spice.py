@@ -79,8 +79,8 @@ def test_spice_flat_deck_top_level_instances_captured(synthetic_spice_flat_deck_
         f"Expected 2 top-level instances, got {len(top_instances)}: {top_instances}"
     )
     cell_types = {inst.cell_type for inst in top_instances}
-    assert cell_types == {"mac6_top", "ldo_aux"}, (
-        f"Expected cell types {{'mac6_top', 'ldo_aux'}}, got {cell_types}"
+    assert cell_types == {"top_block_a", "top_block_b"}, (
+        f"Expected cell types {{'top_block_a', 'top_block_b'}}, got {cell_types}"
     )
 
 
@@ -105,7 +105,7 @@ class TestSpiceQuickwins:
         """Test inline semicolon comment stripping."""
         parser = NetlistParser(synthetic_spice_inline_comments_sp)
         # Verify X1 instance is parsed (line has ; comment at end)
-        insts = parser.instances_by_parent.get("test_inline", [])
+        insts = parser.instances_by_parent.get("spice_inline_comments_cell", [])
         assert len(insts) >= 1, f"Expected at least 1 instance, got {len(insts)}"
         # Check first instance nets (should be stripped of comment)
         assert insts[0].nets == ["A", "B", "C"], f"Got nets {insts[0].nets}"
@@ -113,7 +113,7 @@ class TestSpiceQuickwins:
     def test_spice_inline_comments_dollar(self, synthetic_spice_inline_comments_sp):
         """Test inline dollar-sign comment stripping."""
         parser = NetlistParser(synthetic_spice_inline_comments_sp)
-        insts = parser.instances_by_parent.get("test_inline", [])
+        insts = parser.instances_by_parent.get("spice_inline_comments_cell", [])
         # X2 has $ comment; verify it's parsed correctly
         x2_insts = [inst for inst in insts if inst.name == "X2"]
         assert len(x2_insts) == 1, "Expected X2 instance"
@@ -124,7 +124,7 @@ class TestSpiceQuickwins:
     ):
         """Test continuation lines are merged properly across comment lines."""
         parser = NetlistParser(synthetic_spice_continuation_across_comment_sp)
-        insts = parser.instances_by_parent.get("test_cont", [])
+        insts = parser.instances_by_parent.get("spice_continuation_cell", [])
         assert len(insts) == 1, f"Expected 1 instance, got {len(insts)}"
         # X1 should have all nets from continuation lines merged (A B C D E)
         assert insts[0].cell_type == "test_cell", f"Got cell_type {insts[0].cell_type}"
@@ -294,21 +294,19 @@ class TestSpiceQuickwins:
     def test_spice_edge_case_long_line(self, synthetic_spice_edge_long_line_sp):
         """Test very long netlist line."""
         parser = NetlistParser(synthetic_spice_edge_long_line_sp)
-        insts = parser.instances_by_parent.get("test_long_line", [])
+        insts = parser.instances_by_parent.get("edge_long_line_cell", [])
         assert len(insts) >= 1, f"Expected at least 1 instance, got {len(insts)}"
 
     def test_spice_edge_case_tab_continuation(self, synthetic_spice_edge_tab_continuation_sp):
         """Test tab characters in continuation lines."""
         parser = NetlistParser(synthetic_spice_edge_tab_continuation_sp)
-        insts = parser.instances_by_parent.get("test_tab_cont", [])
+        insts = parser.instances_by_parent.get("edge_tab_continuation_cell", [])
         assert len(insts) >= 1, f"Expected at least 1 instance, got {len(insts)}"
 
     def test_spice_edge_case_mixed_case(self, synthetic_spice_edge_mixed_case_sp):
         """Test mixed case keywords and identifiers."""
         parser = NetlistParser(synthetic_spice_edge_mixed_case_sp)
-        assert "MixedCase_Cell" in parser.subckts, "MixedCase_Cell should be in subckts"
-        assert "Sub_Component" in parser.subckts, "Sub_Component should be in subckts"
-        assert "Another_Comp" in parser.subckts, "Another_Comp should be in subckts"
+        assert "edge_mixed_case_cell" in parser.subckts, "edge_mixed_case_cell should be in subckts"
 
 
 class TestSpiceIncludeSupport:

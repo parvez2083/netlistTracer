@@ -1,9 +1,0 @@
-* Synthetic CDL fixture: supply constant definition
-*.PININFO supply_constant (VDD, VSS)
-
-.SUBCKT supply_constant VDD VSS
-.ENDS supply_constant
-
-.SUBCKT top_supply VDD VSS IN OUT
-X0 VDD VSS supply_constant
-.ENDS top_supply

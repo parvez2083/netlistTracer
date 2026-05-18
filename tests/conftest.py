@@ -12,33 +12,39 @@ def fixtures_synthetic_dir():
 
 
 @pytest.fixture
+def synthetic_verilog_features_v(fixtures_synthetic_dir):
+    """Path to consolidated verilog_features.v fixture."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
+
+
+@pytest.fixture
 def synthetic_concat_alias_v(fixtures_synthetic_dir):
-    """Path to synthetic concat_alias.v fixture."""
-    return os.path.join(fixtures_synthetic_dir, "concat_alias.v")
+    """Path to consolidated verilog_features.v (contains concat_alias_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
 def synthetic_generate_loop_v(fixtures_synthetic_dir):
-    """Path to synthetic generate_loop.v fixture."""
-    return os.path.join(fixtures_synthetic_dir, "generate_loop.v")
+    """Path to consolidated verilog_features.v (contains generate_loop_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
 def synthetic_param_specialize_v(fixtures_synthetic_dir):
-    """Path to synthetic param_specialize.v fixture."""
-    return os.path.join(fixtures_synthetic_dir, "param_specialize.v")
+    """Path to consolidated verilog_features.v (contains param_specialize_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
-def synthetic_supply_constant_cdl(fixtures_synthetic_dir):
-    """Path to synthetic supply_constant.cdl fixture."""
-    return os.path.join(fixtures_synthetic_dir, "supply_constant.cdl")
+def synthetic_spice_features_sp(fixtures_synthetic_dir):
+    """Path to consolidated spice_features.sp fixture."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
 def synthetic_spice_basic_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_basic.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_basic.sp")
+    """Path to consolidated spice_features.sp (contains spice_basic_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
@@ -48,15 +54,51 @@ def synthetic_spice_flat_deck_sp(fixtures_synthetic_dir):
 
 
 @pytest.fixture
+def synthetic_spice_edge_cases_sp(fixtures_synthetic_dir):
+    """Path to consolidated spice_edge_cases.sp fixture."""
+    return os.path.join(fixtures_synthetic_dir, "spice_edge_cases.sp")
+
+
+@pytest.fixture
+def synthetic_spice_edge_long_line_sp(fixtures_synthetic_dir):
+    """Path to consolidated spice_edge_cases.sp (contains edge_long_line_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_edge_cases.sp")
+
+
+@pytest.fixture
+def synthetic_spice_edge_mixed_case_sp(fixtures_synthetic_dir):
+    """Path to consolidated spice_edge_cases.sp (contains edge_mixed_case_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_edge_cases.sp")
+
+
+@pytest.fixture
+def synthetic_spice_edge_tab_continuation_sp(fixtures_synthetic_dir):
+    """Path to consolidated spice_edge_cases.sp (contains edge_tab_continuation_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_edge_cases.sp")
+
+
+@pytest.fixture
+def synthetic_cdl_features_cdl(fixtures_synthetic_dir):
+    """Path to consolidated cdl_features.cdl fixture."""
+    return os.path.join(fixtures_synthetic_dir, "cdl_features.cdl")
+
+
+@pytest.fixture
 def synthetic_cdl_basic_cdl(fixtures_synthetic_dir):
-    """Path to synthetic cdl_basic.cdl fixture."""
-    return os.path.join(fixtures_synthetic_dir, "cdl_basic.cdl")
+    """Path to consolidated cdl_features.cdl (contains cdl_basic_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "cdl_features.cdl")
 
 
 @pytest.fixture
 def synthetic_cdl_internal_nets_cdl(fixtures_synthetic_dir):
-    """Path to synthetic cdl_internal_nets.cdl fixture with internal nets."""
-    return os.path.join(fixtures_synthetic_dir, "cdl_internal_nets.cdl")
+    """Path to consolidated cdl_features.cdl (contains cdl_internal_nets_parent)."""
+    return os.path.join(fixtures_synthetic_dir, "cdl_features.cdl")
+
+
+@pytest.fixture
+def synthetic_supply_constant_cdl(fixtures_synthetic_dir):
+    """Path to consolidated cdl_features.cdl (contains cdl_supply_constant)."""
+    return os.path.join(fixtures_synthetic_dir, "cdl_features.cdl")
 
 
 @pytest.fixture
@@ -67,44 +109,50 @@ def synthetic_spectre_basic_scs(fixtures_synthetic_dir):
 
 @pytest.fixture
 def synthetic_nested_generate_v(fixtures_synthetic_dir):
-    """Path to synthetic nested_generate.v fixture (2-level nested generate-for)."""
-    return os.path.join(fixtures_synthetic_dir, "nested_generate.v")
+    """Path to consolidated verilog_features.v (contains nested_generate_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
 def synthetic_verilog_generate_if_v(fixtures_synthetic_dir):
-    """Path to synthetic verilog_generate_if.v fixture (generate if)."""
-    return os.path.join(fixtures_synthetic_dir, "verilog_generate_if.v")
+    """Path to consolidated verilog_features.v (contains generate_if_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
 def synthetic_verilog_generate_case_v(fixtures_synthetic_dir):
-    """Path to synthetic verilog_generate_case.v fixture (generate case)."""
-    return os.path.join(fixtures_synthetic_dir, "verilog_generate_case.v")
+    """Path to consolidated verilog_features.v (contains generate_case_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
 def synthetic_verilog_gate_primitives_v(fixtures_synthetic_dir):
-    """Path to synthetic verilog_gate_primitives.v fixture (gate primitives)."""
-    return os.path.join(fixtures_synthetic_dir, "verilog_gate_primitives.v")
+    """Path to consolidated verilog_features.v (contains gate_primitives_mod)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
 
 
 @pytest.fixture
 def synthetic_verilog_defparam_v(fixtures_synthetic_dir):
-    """Path to synthetic verilog_defparam.v fixture (defparam parameter override)."""
-    return os.path.join(fixtures_synthetic_dir, "verilog_defparam.v")
+    """Path to consolidated verilog_features.v (contains defparam_top)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_features.v")
+
+
+@pytest.fixture
+def synthetic_verilog_udp_genvar_v(fixtures_synthetic_dir):
+    """Path to consolidated verilog_udp_genvar.v fixture."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_udp_genvar.v")
 
 
 @pytest.fixture
 def synthetic_udp_simple_v(fixtures_synthetic_dir):
-    """Path to synthetic udp_simple.v fixture (Verilog UDP definitions and usage)."""
-    return os.path.join(fixtures_synthetic_dir, "udp_simple.v")
+    """Path to consolidated verilog_udp_genvar.v (contains UDP definitions)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_udp_genvar.v")
 
 
 @pytest.fixture
 def synthetic_genvar_for_label_v(fixtures_synthetic_dir):
-    """Path to synthetic genvar_for_label.v fixture (generate-for with block label)."""
-    return os.path.join(fixtures_synthetic_dir, "genvar_for_label.v")
+    """Path to consolidated verilog_udp_genvar.v (contains genvar_for_top)."""
+    return os.path.join(fixtures_synthetic_dir, "verilog_udp_genvar.v")
 
 
 @pytest.fixture
@@ -145,32 +193,32 @@ def vendored_hic2_ft_sp(fixtures_vendored_dir):
 
 @pytest.fixture
 def synthetic_spice_inline_comments_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_inline_comments.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_inline_comments.sp")
+    """Path to consolidated spice_features.sp (contains spice_inline_comments_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
 def synthetic_spice_continuation_across_comment_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_continuation_across_comment.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_continuation_across_comment.sp")
+    """Path to consolidated spice_features.sp (contains spice_continuation_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
 def synthetic_spice_controlled_sources_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_controlled_sources.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_controlled_sources.sp")
+    """Path to consolidated spice_features.sp (contains spice_controlled_sources_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
 def synthetic_spice_coupled_inductor_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_coupled_inductor.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_coupled_inductor.sp")
+    """Path to consolidated spice_features.sp (contains spice_coupled_inductor_cell)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
 def synthetic_spice_global_directive_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_global_directive.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_global_directive.sp")
+    """Path to consolidated spice_features.sp (contains .GLOBAL directive)."""
+    return os.path.join(fixtures_synthetic_dir, "spice_features.sp")
 
 
 @pytest.fixture
@@ -183,24 +231,6 @@ def synthetic_spice_edge_crlf_sp(fixtures_synthetic_dir):
 def synthetic_spice_edge_utf8_bom_sp(fixtures_synthetic_dir):
     """Path to synthetic spice_edge_utf8_bom.sp fixture."""
     return os.path.join(fixtures_synthetic_dir, "spice_edge_utf8_bom.sp")
-
-
-@pytest.fixture
-def synthetic_spice_edge_long_line_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_edge_long_line.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_edge_long_line.sp")
-
-
-@pytest.fixture
-def synthetic_spice_edge_tab_continuation_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_edge_tab_continuation.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_edge_tab_continuation.sp")
-
-
-@pytest.fixture
-def synthetic_spice_edge_mixed_case_sp(fixtures_synthetic_dir):
-    """Path to synthetic spice_edge_mixed_case.sp fixture."""
-    return os.path.join(fixtures_synthetic_dir, "spice_edge_mixed_case.sp")
 
 
 @pytest.fixture
@@ -231,3 +261,15 @@ def synthetic_simple_inv_spef(fixtures_synthetic_dir):
 def synthetic_simple_inv_spef_gz(fixtures_synthetic_dir):
     """Path to synthetic simple_inv.spef.gz fixture (gzipped SPEF for testing)."""
     return os.path.join(fixtures_synthetic_dir, "simple_inv.spef.gz")
+
+
+@pytest.fixture
+def synthetic_sv_interfaces_sv(fixtures_synthetic_dir):
+    """Path to consolidated sv_interfaces.sv fixture."""
+    return os.path.join(fixtures_synthetic_dir, "sv_interfaces.sv")
+
+
+@pytest.fixture
+def synthetic_edif_features_edif(fixtures_synthetic_dir):
+    """Path to consolidated edif_features.edif fixture."""
+    return os.path.join(fixtures_synthetic_dir, "edif_features.edif")

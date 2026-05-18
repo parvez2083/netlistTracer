@@ -129,29 +129,29 @@ def test_trace_pins_unknown_pin(synthetic_concat_alias_v):
 def test_tracer_flat_deck_up_walk_reveals_siblings(synthetic_spice_flat_deck_sp):
     """Test that tracer UP-walk from a flat-deck child reveals sibling cells.
 
-    This verifies that tracing a pin through mac6_top at the deck level
-    can surface paths that include ldo_aux (a sibling instance).
+    This verifies that tracing a pin through top_block_a at the deck level
+    can surface paths that include top_block_b (a sibling instance).
     """
     parser = NetlistParser(synthetic_spice_flat_deck_sp)
     tracer = BidirectionalTracer(parser)
 
-    # Trace mac6_top pin 'd' (connected to vdd net at the deck level)
+    # Trace top_block_a pin 'd' (connected to vdd net at the deck level)
     # This should find a path that goes UP to the synthetic top,
-    # then DOWN into ldo_aux (which also connects to vdd).
-    paths = tracer.trace("mac6_top", "d")
+    # then DOWN into top_block_b (which also connects to vdd).
+    paths = tracer.trace("top_block_a", "d")
 
-    # Check that at least one path includes a TraceStep with ldo_aux
+    # Check that at least one path includes a TraceStep with top_block_b
     found_sibling = False
     for path in paths:
         for step in path:
-            if hasattr(step, "cell") and step.cell == "ldo_aux":
+            if hasattr(step, "cell") and step.cell == "top_block_b":
                 found_sibling = True
                 break
         if found_sibling:
             break
 
     assert found_sibling, (
-        f"Expected tracer to find sibling cell 'ldo_aux', but it did not. "
+        f"Expected tracer to find sibling cell 'top_block_b', but it did not. "
         f"Paths: {[format_path(p) for p in paths]}"
     )
 

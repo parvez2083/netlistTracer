@@ -169,13 +169,13 @@ def capture_one_counter() -> dict[str, Any]:
     src = os.path.join(FIXTURES_DIR, "one_counter.edf")
     parser = NetlistParser(src)
     tracer = BidirectionalTracer(parser)
-    # Trace start: top cell 'one_counter', clock pin 'XP_PCLK'.
+    # Trace start: top cell 'one_counter', clock pin 'XP_CLK_A'.
     return {
         "fixture": "one_counter.edf",
         "source_url": "https://github.com/byuccl/spydrnet",
         "vendored_sha": "2e7b78a5d04b2d77c630c4c75c97be12095a13fc",
         "parser": parser_snapshot(parser),
-        "trace": trace_snapshot(tracer, start_cell="one_counter", start_pin="XP_PCLK"),
+        "trace": trace_snapshot(tracer, start_cell="one_counter", start_pin="XP_CLK_A"),
     }
 
 

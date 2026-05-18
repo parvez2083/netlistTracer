@@ -84,8 +84,6 @@ def main() -> int:
     Returns:
         Exit code (0 for success, 1 for error).
     """
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
     # Parse +define+ / +incdir+ Verilog tool-style flags before argparse
     filtered_argv, plus_defines, plus_incdirs = _parse_plus_args(sys.argv[1:])
 
@@ -118,7 +116,16 @@ def main() -> int:
         help="Output file path. Format inferred from extension: .json (JSON output), "
         "other (text output). Default: None (text to stdout).",
     )
+    parser.add_argument(
+        "-debug",
+        action="store_true",
+        help="Enable DEBUG-level logging (default: INFO level).",
+    )
     args = parser.parse_args(filtered_argv)
+
+    # Setup logging after argument parsing
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(level=log_level, format="%(message)s")
 
     # Determine output format from -output extension
     otpt_fmt = "text"

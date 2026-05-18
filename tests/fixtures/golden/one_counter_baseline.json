@@ -144,7 +144,7 @@
         "pins": [
           "xp_in",
           "xp_out",
-          "XP_PCLK",
+          "XP_CLK_A",
           "XP_RST"
         ]
       }
@@ -157,7 +157,7 @@
     "paths": [],
     "raw_path_count": 0,
     "start_cell": "one_counter",
-    "start_pin": "XP_PCLK",
+    "start_pin": "XP_CLK_A",
     "unique_path_count": 0
   },
   "vendored_sha": "2e7b78a5d04b2d77c630c4c75c97be12095a13fc"

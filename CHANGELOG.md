@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-17
+
+### Added
+
+- **Per-net bidirectional trace** (`-net` flag): traces a single net across
+  the design hierarchy, following instantiation chains. Supports Verilog/SPICE
+  hierarchical designs and mixed-format netlists.
+- **RTL UDP (user-defined primitive) support**: Verilog primitives with
+  `primitive ... table ... endtable endprimitive` syntax now parse correctly;
+  used in RTL designs for combinational/sequential logic modeling.
+- **`+define+` and `+incdir+` CLI flags**: Verilog tool-style flags accepted
+  for preprocessor defines and include paths (replaces the removed `-defines`/`-include`).
+- **SPEF as first-class format**: SPEF (Standard Parasitic Exchange Format)
+  recognized as a primary output format; can be dumped via `-output FILE.spef`.
+- **Lazy SPF parsing with gzip support**: SPF/DSPF files and `.gz`-compressed
+  variants glob correctly; parsing deferred until first subckt access.
+- **Genvar block-label preservation**: `generate ... for (...) begin: label`
+  block labels now correctly preserved in flat instance names (e.g.,
+  `label[0].instance`, `label[1].instance`).
+- **`-debug` CLI flag**: Enable DEBUG-level logging output for both
+  `netlist-tracer` and `netlist-parser` commands.
+
+### Changed
+
+- **Unified include-file resolver**: resolves `.include`/`.inc` (Spectre,
+  DSPF) and `dspf_include` recursively with shared path semantics; supports
+  relative paths from file location. SPEF `.gz` variant auto-detected.
+- **CLI flag removals and renames**: 
+  - `-pin` merged into `-net` (unified net tracing)
+  - `-format`, `-trace_format`, `-defines`, `-include` removed (auto-detection, `-output`, `+define+`/`+incdir+`)
+  - `-top CELL` renamed to `-topcell CELL`
+- **Fixture tree consolidation**: merged 50 synthetic test fixtures down to 22
+  consolidated multi-subckt/multi-module fixtures to reduce test noise and
+  improve maintainability.
+
+### Fixed
+
+- **Merge of `-pin` trace into `-net` trace**: single unified net-trace
+  mechanism replaces separate pin/net walk logic.
+- **Stream dump_json output**: JSON stream now correctly flushes per-record
+  for live pipeline consumption (not end-buffered).
+- **SPEF overlay mode deprecation**: SPEF-as-net-overlay no longer supported
+  (now primary format via `-output`).
+
 ## [0.5.0] - 2026-05-16
 
 ### Added

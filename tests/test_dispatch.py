@@ -19,7 +19,7 @@ class TestDetectFormatPerFile:
         """Homogeneous Verilog file list groups into single verilog format."""
         fixture_dir = Path(__file__).parent / "fixtures" / "synthetic"
         v_files = sorted(
-            [str(fixture_dir / "concat_alias.v"), str(fixture_dir / "generate_loop.v")]
+            [str(fixture_dir / "verilog_features.v"), str(fixture_dir / "verilog_udp_genvar.v")]
         )
 
         frmt_grps = detect_format_per_file(v_files)
@@ -31,8 +31,8 @@ class TestDetectFormatPerFile:
     def test_detect_format_per_file_mixed_verilog_spice(self) -> None:
         """Mixed Verilog + SPICE files group into separate format buckets."""
         fixture_dir = Path(__file__).parent / "fixtures" / "synthetic"
-        v_file = str(fixture_dir / "concat_alias.v")
-        sp_file = str(fixture_dir / "spice_basic.sp")
+        v_file = str(fixture_dir / "verilog_features.v")
+        sp_file = str(fixture_dir / "spice_features.sp")
 
         frmt_grps = detect_format_per_file([v_file, sp_file])
 
@@ -45,9 +45,9 @@ class TestDetectFormatPerFile:
     def test_detect_format_per_file_sorted_within_group(self) -> None:
         """Files within each format group are sorted alphabetically."""
         fixture_dir = Path(__file__).parent / "fixtures" / "synthetic"
-        v1 = str(fixture_dir / "generate_loop.v")
-        v2 = str(fixture_dir / "concat_alias.v")
-        v3 = str(fixture_dir / "param_specialize.v")
+        v1 = str(fixture_dir / "verilog_features.v")
+        v2 = str(fixture_dir / "verilog_udp_genvar.v")
+        v3 = str(fixture_dir / "sv_interfaces.sv")
 
         frmt_grps = detect_format_per_file([v1, v2, v3])
 
@@ -159,7 +159,7 @@ endmodule
 
     def test_dispatch_single_file_unchanged_behavior(self) -> None:
         """Single-file path maintains identical behavior to v0.4.1."""
-        fixture_path = Path(__file__).parent / "fixtures" / "synthetic" / "spice_basic.sp"
+        fixture_path = Path(__file__).parent / "fixtures" / "synthetic" / "spice_features.sp"
         if not fixture_path.exists():
             pytest.skip(f"Fixture {fixture_path} not found")
 
@@ -224,13 +224,10 @@ endmodule
 class TestDispatchBackwardCompatibility:
     """Tests ensuring backward compatibility with v0.4.1 behavior."""
 
-    def test_single_file_verilog_byte_identical(self) -> None:
+    def test_single_file_verilog_byte_identical(self, synthetic_verilog_features_v: str) -> None:
         """Single Verilog file parse produces identical results as before."""
-        fixture_path = Path(__file__).parent / "fixtures" / "synthetic" / "concat_alias.v"
-        if not fixture_path.exists():
-            pytest.skip(f"Fixture {fixture_path} not found")
-
-        parser = NetlistParser(str(fixture_path))
+        parser = NetlistParser(synthetic_verilog_features_v)
+        assert "concat_alias" in parser.subckts, "concat_alias module should be in verilog_features.v"
 
         # Should have subckts (the fixture defines modules)
         assert len(parser.subckts) > 0
@@ -239,7 +236,7 @@ class TestDispatchBackwardCompatibility:
 
     def test_single_file_spice_byte_identical(self) -> None:
         """Single SPICE file parse produces identical results as before."""
-        fixture_path = Path(__file__).parent / "fixtures" / "synthetic" / "spice_basic.sp"
+        fixture_path = Path(__file__).parent / "fixtures" / "synthetic" / "spice_features.sp"
         if not fixture_path.exists():
             pytest.skip(f"Fixture {fixture_path} not found")
 

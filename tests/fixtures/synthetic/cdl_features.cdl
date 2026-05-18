@@ -1,0 +1,39 @@
+* cdl_features.cdl — consolidated CDL fixture: basic nand, internal nets, supply constant
+
+* Feature: CDL with PININFO marker
+*.PININFO nand3 (Y, A, B, C, VDD, VSS)
+
+.SUBCKT nand3 Y A B C VDD VSS
+M1 Y A VDD VDD pmos W=2u L=1u
+M2 Y B VDD VDD pmos W=2u L=1u
+M3 Y A 1 VSS nmos W=1u L=1u
+M4 1 B VSS VSS nmos W=1u L=1u
+.ENDS nand3
+
+.SUBCKT top_cdl VDD VSS A B C Y
+X1 Y A B C VDD VSS nand3
+.ENDS top_cdl
+
+* Feature: CDL with internal nets (nets that appear in instance connections only)
+.SUBCKT child_module inp VSS VDD out
+M1 out inp VDD VDD pmos W=2u L=1u
+M2 out inp VSS VSS nmos W=1u L=1u
+.ENDS child_module
+
+.SUBCKT parent_cell external_a external_b VSS VDD external_out
+* Multi-line instance: internal_sig is a net that exists only in this subckt body
+X_child1 external_a VSS VDD internal_sig
++ child_module
+X_child2 internal_sig VSS VDD external_out
++ child_module
+.ENDS parent_cell
+
+* Feature: CDL with supply constant definition
+*.PININFO supply_constant (VDD, VSS)
+
+.SUBCKT supply_constant VDD VSS
+.ENDS supply_constant
+
+.SUBCKT top_supply VDD VSS IN OUT
+X0 VDD VSS supply_constant
+.ENDS top_supply

@@ -1,6 +1,6 @@
-// Simple Verilog UDP (user-defined primitive) for testing
-// Defines a basic XOR primitive and uses it in a module
+// verilog_udp_genvar.v — consolidated Verilog fixture: UDP definitions + genvar-for with block label
 
+// Feature: Verilog UDP (user-defined primitives) XOR and BUF
 primitive udp_xor (y, a, b);
   output y;
   input a, b;
@@ -14,7 +14,6 @@ primitive udp_xor (y, a, b);
   endtable
 endprimitive
 
-// Another UDP for testing
 primitive udp_buf (out, in);
   output out;
   input in;
@@ -42,4 +41,25 @@ module top (clk, data_in, data_out);
   output data_out;
 
   udp_xor u1 (.a(clk), .b(data_in), .y(data_out));
+endmodule
+
+// Feature: generate-for with block label (genvar iteration)
+// Expected behavior: instances should include label[i] prefix in flat names
+// e.g., gblock[0].ucell, gblock[1].ucell, gblock[2].ucell (NOT three instances all named ucell)
+module my_top (
+  input clk,
+  output out
+);
+  genvar i;
+  generate
+    for (i = 0; i < 3; i = i + 1) begin: gblock
+      my_cell ucell (.clk(clk), .out(out));
+    end
+  endgenerate
+endmodule
+
+module my_cell (
+  input clk,
+  output out
+);
 endmodule

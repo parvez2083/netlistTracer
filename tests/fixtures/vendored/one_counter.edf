@@ -427,7 +427,7 @@
          (interface
            (port (array (rename xp_in "XP_IN(7:0)") 8) (direction INPUT))
            (port (array (rename xp_out "XP_OUT(7:0)") 8) (direction OUTPUT))
-           (port XP_PCLK (direction INPUT)
+           (port XP_CLK_A (direction INPUT)
  )
            (port XP_RST (direction INPUT)
  )
@@ -477,8 +477,8 @@
           (instance CLK_IBUFG (viewRef PRIM (cellRef IBUFG (libraryRef VIRTEX)))
           )
           (instance counter8 (viewRef netlist (cellRef counter))          )
-          (net (rename xp_pclk "XP_PCLK") (joined
-           (portRef XP_PCLK)
+          (net (rename xp_clk_a "XP_CLK_A") (joined
+           (portRef XP_CLK_A)
            (portRef I (instanceRef CLK_IBUFG))
           ))
           (net (rename xp_rst "XP_RST") (joined

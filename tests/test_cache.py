@@ -15,16 +15,14 @@ from netlist_tracer.exceptions import NetlistParseError
 FIXTURES_DIR = os.path.join(os.path.dirname(__file__), "fixtures", "vendored")
 
 
-def test_dump_includes_schema_version() -> None:
+def test_dump_includes_schema_version(synthetic_spice_features_sp: str) -> None:
     """Verify that dump_json() includes a current schema_version field."""
     from netlist_tracer.parser import _CACHE_SCHEMA_VERSION
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Parse a minimal fixture (using spice_basic.sp)
-        fixture_path = Path(__file__).parent / "fixtures" / "synthetic" / "spice_basic.sp"
-        if not fixture_path.exists():
-            pytest.skip(f"Fixture {fixture_path} not found")
-        parser = NetlistParser(str(fixture_path))
+        # Parse the consolidated spice_features.sp fixture
+        parser = NetlistParser(synthetic_spice_features_sp)
+        assert "nand2" in parser.subckts, "nand2 subckt should be in spice_features.sp"
 
         # Dump to JSON
         out_path = Path(tmpdir) / "cache.json"

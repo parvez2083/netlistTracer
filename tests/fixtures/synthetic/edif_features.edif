@@ -1,0 +1,205 @@
+(edif edif_features
+  (edifversion 2 0 0)
+  (edifLevel 0)
+  (keywordmap (keywordlevel 0))
+  (Library busarray_lib
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell BUS_TEST (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port (array (rename data_safe "data[7:0]") 8) (direction INPUT))
+          (port single (direction OUTPUT))
+        )
+        (contents
+          (net data0 (joined
+            (portref (member data 0))
+            (portref single)
+          ))
+          (net data1 (joined
+            (portref (member data 1))
+          ))
+          (net data2 (joined
+            (portref (member data 2))
+          ))
+          (net data3 (joined
+            (portref (member data 3))
+          ))
+          (net data4 (joined
+            (portref (member data 4))
+          ))
+          (net data5 (joined
+            (portref (member data 5))
+          ))
+          (net data6 (joined
+            (portref (member data 6))
+          ))
+          (net data7 (joined
+            (portref (member data 7))
+          ))
+        )
+      )
+    )
+  )
+  (Library multilib_tech
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell INV (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port I (direction INPUT))
+          (port O (direction OUTPUT))
+        )
+      )
+    )
+    (cell BUF (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port I (direction INPUT))
+          (port O (direction OUTPUT))
+        )
+      )
+    )
+  )
+  (Library multilib_design
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell TOP (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port A (direction INPUT))
+          (port B (direction OUTPUT))
+        )
+        (contents
+          (instance inv_inst (viewref netlist (cellref INV (libraryref multilib_tech))))
+          (instance buf_inst (viewref netlist (cellref BUF (libraryref multilib_tech))))
+          (net A (joined
+            (portref A)
+            (portref I (instanceref inv_inst))
+          ))
+          (net mid (joined
+            (portref O (instanceref inv_inst))
+            (portref I (instanceref buf_inst))
+          ))
+          (net B (joined
+            (portref O (instanceref buf_inst))
+            (portref B)
+          ))
+        )
+      )
+    )
+  )
+  (Library collision_tech
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell INV (celltype GENERIC)
+      (property version (string "v1"))
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port I (direction INPUT))
+          (port O (direction OUTPUT))
+        )
+      )
+    )
+  )
+  (Library collision_design
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell INV (celltype GENERIC)
+      (property version (string "v2"))
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port I (direction INPUT))
+          (port O (direction OUTPUT))
+        )
+      )
+    )
+    (cell TOP (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port A (direction INPUT))
+          (port B (direction OUTPUT))
+        )
+        (contents
+          (instance inv_inst (viewref netlist (cellref INV (libraryref collision_design))))
+          (net A (joined
+            (portref A)
+            (portref I (instanceref inv_inst))
+          ))
+          (net B (joined
+            (portref O (instanceref inv_inst))
+            (portref B)
+          ))
+        )
+      )
+    )
+  )
+  (Library properties_lib
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell PROP_TEST (celltype GENERIC)
+      (property author (string "ACME"))
+      (property width (integer 8))
+      (property pi (real 3.14))
+      (property enabled (boolean true))
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port A (direction INPUT)
+            (property location (string "left"))
+          )
+          (port B (direction OUTPUT)
+            (property location (string "right"))
+          )
+        )
+        (contents
+          (instance I1 (viewref netlist (cellref PROP_TEST (libraryref properties_lib)))
+            (property depth (integer 16))
+          )
+          (net A (joined
+            (portref A)
+            (portref A (instanceref I1))
+          ))
+          (net B (joined
+            (portref B)
+            (portref B (instanceref I1))
+          ))
+        )
+      )
+    )
+  )
+  (Library rename_tech
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell INV (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port I (direction INPUT))
+          (port O (direction OUTPUT))
+        )
+      )
+    )
+  )
+  (Library rename_design
+    (edifLevel 0)
+    (technology (numberDefinition ))
+    (cell (rename SAFE_NAME "orig[7:0]") (celltype GENERIC)
+      (view netlist (viewtype NETLIST)
+        (interface
+          (port i (direction INPUT))
+          (port o (direction OUTPUT))
+        )
+        (contents
+          (instance (rename u1_safe "u1[0]") (viewref netlist (cellref INV (libraryref rename_tech))))
+          (net i (joined
+            (portref I (instanceref u1_safe))
+            (portref i)
+          ))
+          (net o (joined
+            (portref O (instanceref u1_safe))
+            (portref o)
+          ))
+        )
+      )
+    )
+  )
+)

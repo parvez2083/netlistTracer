@@ -98,7 +98,7 @@ def suggest_pins(query: str, pins: list[str]) -> list[str]:
       1. Strip bus-bracket suffixes ([N], <N>) from each pin to get base names.
       2. Case-insensitive substring containment: pins whose base contains the
          query are listed first (catches short queries inside long pin names,
-         e.g. 'vref' inside 'bg_vrefOut_VDDA_ana').
+         e.g. 'vref' inside 'vrefOut_supply_a').
       3. Difflib fuzzy matches (cutoff 0.6) appended for typo handling, skipping
          duplicates of the substring hits.
 
