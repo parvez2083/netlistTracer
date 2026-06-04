@@ -4,6 +4,7 @@ import re
 
 from netlist_tracer._logging import get_logger
 from netlist_tracer.parsers.verilog.preprocess import (
+    _sv_extract_defines_from_text,
     _sv_preprocess,
     _sv_strip_comments,
     _sv_substitute_vars,
@@ -198,6 +199,9 @@ def _sv_parse_file(args: tuple[str, dict, set, dict]) -> list:
         return []
     if tvars:
         raw = _sv_substitute_vars(raw, tvars)
+    # Extract defines from the current file before stripping comments
+    file_defines = _sv_extract_defines_from_text(raw)
+    define_values = {**(define_values or {}), **file_defines}
     raw = _sv_strip_comments(raw)
     raw = _sv_preprocess(raw, defines)
     raw = _strip_analog_blocks(raw)

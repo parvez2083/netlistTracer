@@ -195,6 +195,57 @@ def _sv_parse_define_values(
     return resolved
 
 
+def _sv_extract_defines_from_text(
+    content: str,
+) -> dict[str, int]:
+    """Extract and resolve `define macros from text content.
+
+    Args:
+        content: Text content to scan for `define statements.
+
+    Returns:
+        Dict of {name: int} for resolved numeric defines.
+    """
+    raw_defs: dict[str, str] = {}
+    for line in content.split("\n"):
+        mv = _RE_DEFINE_VALUE.match(line)
+        if mv:
+            name = mv.group(1)
+            val = mv.group(2).strip()
+            ci = val.find("//")
+            if ci >= 0:
+                val = val[:ci].strip()
+            if val:
+                raw_defs[name] = val
+            continue
+        mb = _RE_DEFINE_BARE.match(line)
+        if mb:
+            pass
+    resolved: dict[str, int] = {}
+    for _ in range(5):
+        progress = False
+        for name, expr in raw_defs.items():
+            if name in resolved:
+                continue
+
+            def _repl(m):
+                ref = m.group(1)
+                if ref in resolved:
+                    return str(resolved[ref])
+                return m.group(0)
+
+            val_str = re.sub(r"`(\w+)", _repl, expr)
+            if re.match(r"^[\d\s+\-*/()]+$", val_str):
+                try:
+                    resolved[name] = int(eval(val_str))
+                    progress = True
+                except Exception:
+                    pass
+        if not progress:
+            break
+    return resolved
+
+
 def _sv_resolve_bound(expr: str, define_values: Optional[dict[str, int]] = None) -> Optional[int]:
     """Resolve a genfor loop bound expression to an integer."""
     if define_values is None:

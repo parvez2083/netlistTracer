@@ -1107,3 +1107,137 @@ endmodule
                 assert len(parser.subckts["malformed_header"].pins) == 0, (
                     "malformed_header should have no pins if present"
                 )
+
+
+def test_parser_verilog_define_driven_port_width(synthetic_define_width_macro_v):
+    """Test that backtick-define width expressions are resolved in port declarations.
+
+    Fixture contains:
+      `define DATA_W 4
+      module child_mod (
+          input  [`DATA_W-1:0] data_in,
+          output [`DATA_W-1:0] data_out
+      );
+      module top_mod (...);
+          child_mod sub_inst (.data_in(in_top), .data_out(out_top));
+      endmodule
+
+    Assertion: child_mod's data_in and data_out ports expand to 4 bit-level pins each,
+    and the parent's instance has inst.nets of length 8 with per-bit entries.
+    """
+    parser = NetlistParser(synthetic_define_width_macro_v)
+    assert parser.format == "verilog"
+
+    # Check child_mod has 8 pins (4-bit data_in, 4-bit data_out)
+    assert "child_mod" in parser.subckts, "child_mod should be parsed"
+    child_mod = parser.subckts["child_mod"]
+    assert len(child_mod.pins) == 8, (
+        f"child_mod should have 8 pins (4 data_in + 4 data_out), got {len(child_mod.pins)}"
+    )
+
+    # Verify pin names are expanded (not bare)
+    pin_names = child_mod.pins
+    assert any("[" in p for p in pin_names), (
+        f"Expected bit-level pin names with [i] suffix, got {pin_names}"
+    )
+
+    # Check top_mod's instance
+    assert "top_mod" in parser.subckts, "top_mod should be parsed"
+    insts = parser.instances_by_parent.get("top_mod", [])
+    assert len(insts) >= 1, "top_mod should have at least one instance"
+    sub_inst = insts[0]
+    assert sub_inst.name == "sub_inst", f"Instance name should be sub_inst, got {sub_inst.name}"
+    assert len(sub_inst.nets) == 8, (
+        f"sub_inst should have 8 nets (matching child_mod's 8 pins), got {len(sub_inst.nets)}"
+    )
+
+    # Verify nets are per-bit (not bare identifiers)
+    assert all("[" in net or net == "" for net in sub_inst.nets), (
+        f"Nets should be bit-indexed, got {sub_inst.nets}"
+    )
+
+
+def test_parser_verilog_concat_unresolved_falls_back_to_split(synthetic_concat_unresolved_v):
+    """Test that concat fallback in specialize.py correctly splits operands when expand fails.
+
+    Fixture contains:
+      module sink_mod (input [5:0] bus);
+      endmodule
+      module top_mod_concat;
+          sink_mod sub_inst (.bus({signal_hi, signal_lo}));
+      endmodule
+
+    Operands signal_hi and signal_lo are intentionally undeclared to force _sv_expand_pin_net
+    to return None. The fallback should then:
+    - Detect the concat {...}
+    - Split into 2 operands (signal_hi, signal_lo)
+    - Compute bits_per_operand = 6 / 2 = 3
+    - Emit 3 bits per operand: signal_hi[2:0], signal_lo[2:0]
+
+    Assertion: inst.nets contains per-operand indexed names (e.g., signal_hi[2], signal_hi[1], signal_hi[0],
+    signal_lo[2], signal_lo[1], signal_lo[0]) and does NOT contain the literal concat string.
+    """
+    parser = NetlistParser(synthetic_concat_unresolved_v)
+    assert parser.format == "verilog"
+
+    # Get the top_mod_concat instance
+    assert "top_mod_concat" in parser.subckts, "top_mod_concat should be parsed"
+    insts = parser.instances_by_parent.get("top_mod_concat", [])
+    assert len(insts) >= 1, "top_mod_concat should have at least one instance"
+    sub_inst = insts[0]
+
+    # Assert: inst.nets should have length matching port width (6 bits)
+    assert len(sub_inst.nets) == 6, (
+        f"sub_inst should have 6 nets (matching sink_mod's [5:0] bus), got {len(sub_inst.nets)}"
+    )
+
+    # Assert: the literal concat string should NOT appear at any position
+    concat_literal = "{signal_hi, signal_lo}"
+    assert not any(concat_literal in net for net in sub_inst.nets), (
+        f"Raw concat literal should not appear in nets, but found in {sub_inst.nets}"
+    )
+
+    # Assert: per-operand indexed nets should be present
+    has_signal_hi = any("signal_hi[" in net for net in sub_inst.nets)
+    has_signal_lo = any("signal_lo[" in net for net in sub_inst.nets)
+    assert has_signal_hi, f"Expected signal_hi[i] entries in nets, got {sub_inst.nets}"
+    assert has_signal_lo, f"Expected signal_lo[i] entries in nets, got {sub_inst.nets}"
+
+
+def test_parser_verilog_unresolved_single_net_fallback_preserved():
+    """Test that the existing fallback for single-identifier unresolved nets still works.
+
+    When _sv_expand_pin_net fails for a non-concat single-identifier net (e.g., .bus(my_wire)
+    where my_wire's width is unknown), the fallback should emit per-bit my_wire[i] entries.
+
+    This test confirms the non-concat single-net fallback path is not broken by Fix B.
+    """
+    code = """
+module sink_mod (input [3:0] bus);
+endmodule
+
+module top_mod (input x, output y);
+    sink_mod sub_inst (.bus(my_wire));
+endmodule
+"""
+    import tempfile
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        vfile = Path(tmpdir) / "test_single_fallback.v"
+        vfile.write_text(code)
+        parser = NetlistParser(str(vfile))
+
+        assert "top_mod" in parser.subckts, "top_mod should be parsed"
+        insts = parser.instances_by_parent.get("top_mod", [])
+        assert len(insts) >= 1, "top_mod should have at least one instance"
+        sub_inst = insts[0]
+
+        # Assert: inst.nets should have length 4 (matching bus[3:0])
+        assert len(sub_inst.nets) == 4, (
+            f"sub_inst should have 4 nets, got {len(sub_inst.nets)}: {sub_inst.nets}"
+        )
+
+        # Assert: each net should be my_wire[i] with some index
+        expected_nets = ["my_wire[3]", "my_wire[2]", "my_wire[1]", "my_wire[0]"]
+        assert sub_inst.nets == expected_nets, f"Expected {expected_nets}, got {sub_inst.nets}"

@@ -279,3 +279,15 @@ def synthetic_edif_features_edif(fixtures_synthetic_dir):
 def synthetic_intf_pkg_header_sv(fixtures_synthetic_dir):
     """Path to synthetic intf_pkg_header.sv fixture (module with package imports in header)."""
     return os.path.join(fixtures_synthetic_dir, "intf_pkg_header.sv")
+
+
+@pytest.fixture
+def synthetic_define_width_macro_v(fixtures_synthetic_dir):
+    """Path to synthetic define_width_macro.v fixture (backtick-define width macro)."""
+    return os.path.join(fixtures_synthetic_dir, "define_width_macro.v")
+
+
+@pytest.fixture
+def synthetic_concat_unresolved_v(fixtures_synthetic_dir):
+    """Path to synthetic concat_unresolved.v fixture (concat with unresolved operand widths)."""
+    return os.path.join(fixtures_synthetic_dir, "concat_unresolved.v")

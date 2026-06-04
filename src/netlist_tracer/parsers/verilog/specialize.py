@@ -5,7 +5,11 @@ from collections import defaultdict
 from typing import Optional
 
 from netlist_tracer.model import SubcktDef
-from netlist_tracer.parsers.verilog.structure import _sv_extract_instances, _sv_extract_wires_2d
+from netlist_tracer.parsers.verilog.structure import (
+    _sv_extract_instances,
+    _sv_extract_wires_2d,
+    _sv_split_concat_pieces,
+)
 
 _RE_BRACKET_EXPR = re.compile(r"\[([^\[\]]+)\]")
 _RE_SAFE_ARITH = re.compile(r"^[\d\s+\-*/()]+$")
@@ -205,12 +209,37 @@ def _sv_assemble(
                                 nets.extend(expanded)
                             else:
                                 if net_str:
-                                    for bit_name in bits:
-                                        bm = re.match(r"^[A-Za-z_]\w*\[(\d+)\]$", bit_name)
-                                        if bm:
-                                            nets.append(f"{net_str}[{bm.group(1)}]")
+                                    # Check if net_str is a top-level concatenation
+                                    stripped = net_str.strip()
+                                    if stripped.startswith("{") and stripped.endswith("}"):
+                                        # Attempt concat-aware split
+                                        operands = _sv_split_concat_pieces(stripped[1:-1])
+                                        port_width = len(bits)
+                                        n_operands = len(operands)
+                                        if port_width % n_operands == 0:
+                                            bits_per_op = port_width // n_operands
+                                            concat_result = []
+                                            for operand in operands:
+                                                operand = operand.strip()
+                                                # Only emit indexed names if operand is a bare identifier
+                                                if re.match(r"^[A-Za-z_]\w*$", operand):
+                                                    for i in range(bits_per_op - 1, -1, -1):
+                                                        concat_result.append(f"{operand}[{i}]")
+                                                else:
+                                                    # Non-bare operand: fall back to replicating operand
+                                                    concat_result.extend([operand] * bits_per_op)
+                                            nets.extend(concat_result)
                                         else:
-                                            nets.append(net_str)
+                                            # Uneven split: replicate raw concat
+                                            nets.extend([net_str] * len(bits))
+                                    else:
+                                        # Non-concat fallback: single-net per-bit emission
+                                        for bit_name in bits:
+                                            bm = re.match(r"^[A-Za-z_]\w*\[(\d+)\]$", bit_name)
+                                            if bm:
+                                                nets.append(f"{net_str}[{bm.group(1)}]")
+                                            else:
+                                                nets.append(net_str)
                                 else:
                                     nets.extend([""] * len(bits))
                     else:
