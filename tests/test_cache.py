@@ -254,6 +254,195 @@ def test_v3_empty_params_omitted() -> None:
         )
 
 
+def test_dump_byte_deterministic() -> None:
+    """Verify that shuffled in-memory insertion order yields byte-identical JSON dumps.
+
+    Constructs two parsers with identical logical models but different insertion
+    orders (one ascending, one descending) for subckts and instances. Both should
+    produce byte-identical dumps despite the in-memory order difference.
+    """
+    from netlist_tracer.model import Instance, SubcktDef
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Parser A: insert subckts and instances in ascending order
+        parser_a = NetlistParser.__new__(NetlistParser)
+        parser_a.filename = "synthetic"
+        parser_a.source_path = "synthetic"
+        parser_a.format = "spice"
+
+        # Build the same logical model in ascending order
+        parser_a.subckts = {
+            "cell_a": SubcktDef(name="cell_a", pins=["p1", "p2"]),
+            "cell_b": SubcktDef(name="cell_b", pins=["x", "y", "z"]),
+            "cell_c": SubcktDef(name="cell_c", pins=["in", "out"]),
+        }
+        # Add params and aliases to some subckts
+        parser_a.subckts["cell_b"].params = {"_kind": "special", "_version": "1"}
+        parser_a.subckts["cell_c"].aliases = {"out_alias": "out", "in_alias": "in"}
+
+        parser_a.instances_by_parent = {
+            "top": [
+                Instance(
+                    name="inst_1",
+                    cell_type="cell_a",
+                    nets=["n1", "n2"],
+                    parent_cell="top",
+                    params={},
+                ),
+                Instance(
+                    name="inst_2",
+                    cell_type="cell_b",
+                    nets=["n3", "n4", "n5"],
+                    parent_cell="top",
+                    params={"_value": "100", "_merged_from": ["R1", "R2"]},
+                ),
+                Instance(
+                    name="inst_3",
+                    cell_type="cell_c",
+                    nets=["n6", "n7"],
+                    parent_cell="top",
+                    params={},
+                ),
+            ],
+            "cell_b": [
+                Instance(
+                    name="sub_inst_1",
+                    cell_type="cell_a",
+                    nets=["na1", "na2"],
+                    parent_cell="cell_b",
+                    params={},
+                ),
+            ],
+        }
+        parser_a.instances_by_celltype = {
+            "cell_a": [
+                parser_a.instances_by_parent["top"][0],
+                parser_a.instances_by_parent["cell_b"][0],
+            ],
+            "cell_b": [parser_a.instances_by_parent["top"][1]],
+            "cell_c": [parser_a.instances_by_parent["top"][2]],
+        }
+        parser_a.instances_by_name = {
+            "inst_1": parser_a.instances_by_parent["top"][0],
+            "inst_2": parser_a.instances_by_parent["top"][1],
+            "inst_3": parser_a.instances_by_parent["top"][2],
+            "sub_inst_1": parser_a.instances_by_parent["cell_b"][0],
+        }
+        parser_a.global_nets = []
+
+        # Parser B: insert subckts and instances in DESCENDING/different order
+        parser_b = NetlistParser.__new__(NetlistParser)
+        parser_b.filename = "synthetic"
+        parser_b.source_path = "synthetic"
+        parser_b.format = "spice"
+
+        # Build the SAME logical model but in different insertion order (reverse dict order)
+        parser_b.subckts = {
+            "cell_c": SubcktDef(name="cell_c", pins=["in", "out"]),
+            "cell_b": SubcktDef(name="cell_b", pins=["x", "y", "z"]),
+            "cell_a": SubcktDef(name="cell_a", pins=["p1", "p2"]),
+        }
+        # Add same params and aliases
+        parser_b.subckts["cell_b"].params = {"_kind": "special", "_version": "1"}
+        parser_b.subckts["cell_c"].aliases = {"out_alias": "out", "in_alias": "in"}
+
+        # Insert instances in different nested order (cell_b parent first, then top)
+        parser_b.instances_by_parent = {
+            "cell_b": [
+                Instance(
+                    name="sub_inst_1",
+                    cell_type="cell_a",
+                    nets=["na1", "na2"],
+                    parent_cell="cell_b",
+                    params={},
+                ),
+            ],
+            "top": [
+                Instance(
+                    name="inst_3",
+                    cell_type="cell_c",
+                    nets=["n6", "n7"],
+                    parent_cell="top",
+                    params={},
+                ),
+                Instance(
+                    name="inst_2",
+                    cell_type="cell_b",
+                    nets=["n3", "n4", "n5"],
+                    parent_cell="top",
+                    params={"_value": "100", "_merged_from": ["R1", "R2"]},
+                ),
+                Instance(
+                    name="inst_1",
+                    cell_type="cell_a",
+                    nets=["n1", "n2"],
+                    parent_cell="top",
+                    params={},
+                ),
+            ],
+        }
+        parser_b.instances_by_celltype = {
+            "cell_c": [parser_b.instances_by_parent["top"][0]],
+            "cell_b": [parser_b.instances_by_parent["top"][1]],
+            "cell_a": [
+                parser_b.instances_by_parent["top"][2],
+                parser_b.instances_by_parent["cell_b"][0],
+            ],
+        }
+        parser_b.instances_by_name = {
+            "inst_3": parser_b.instances_by_parent["top"][0],
+            "inst_2": parser_b.instances_by_parent["top"][1],
+            "inst_1": parser_b.instances_by_parent["top"][2],
+            "sub_inst_1": parser_b.instances_by_parent["cell_b"][0],
+        }
+        parser_b.global_nets = []
+
+        # Dump both to temp files
+        dump_a = Path(tmpdir) / "dump_a.json"
+        dump_b = Path(tmpdir) / "dump_b.json"
+        parser_a.dump_json(str(dump_a))
+        parser_b.dump_json(str(dump_b))
+
+        # Read both as bytes and compare
+        with open(dump_a, "rb") as f:
+            bytes_a = f.read()
+        with open(dump_b, "rb") as f:
+            bytes_b = f.read()
+
+        assert bytes_a == bytes_b, (
+            "Dumps of identical logical models with different insertion orders "
+            "should be byte-identical after sort canonicalization"
+        )
+
+        # Also verify that the JSON is still valid and contains expected structure
+        with open(dump_a) as f:
+            data_a = json.load(f)
+        with open(dump_b) as f:
+            data_b = json.load(f)
+
+        # Check subckts
+        assert set(data_a["subckts"].keys()) == {"cell_a", "cell_b", "cell_c"}
+        assert set(data_b["subckts"].keys()) == {"cell_a", "cell_b", "cell_c"}
+
+        # Check instances
+        inst_names_a = {i["name"] for i in data_a["instances"]}
+        inst_names_b = {i["name"] for i in data_b["instances"]}
+        assert inst_names_a == {"inst_1", "inst_2", "inst_3", "sub_inst_1"}
+        assert inst_names_b == {"inst_1", "inst_2", "inst_3", "sub_inst_1"}
+
+        # Check that params and aliases are present
+        assert "subckt_params" in data_a, "subckt_params should be present"
+        assert data_a["subckt_params"]["cell_b"] == {"_kind": "special", "_version": "1"}
+        assert "aliases" in data_a, "aliases should be present"
+        assert data_a["aliases"]["cell_c"] == {"out_alias": "out", "in_alias": "in"}
+
+        # Check that instances with params have params field
+        inst_2_a = next(i for i in data_a["instances"] if i["name"] == "inst_2")
+        assert "params" in inst_2_a, "inst_2 should have params"
+        assert inst_2_a["params"]["_value"] == "100"
+        assert inst_2_a["params"]["_merged_from"] == ["R1", "R2"]
+
+
 def test_v2_cache_still_loads() -> None:
     """Verify backward compatibility: v2 cache (with schema_version=2) loads correctly."""
     with tempfile.TemporaryDirectory() as tmpdir:

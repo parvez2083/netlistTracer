@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-27
+
+### Changed
+
+- **Byte-deterministic JSON cache output**: `dump_json` now emits subckts,
+  instances, aliases, and params in a canonical sorted order (subckts by name,
+  instances by `(parent_cell, name)`, dict keys via `sort_keys`), so two parses
+  of the same source produce byte-identical cache files even when parallel
+  Verilog parsing perturbs in-memory insertion order. Trace results and cache
+  schema (v3) are unchanged; list contents (pins, nets, merged-R sequences)
+  retain their positional order.
+
 ## [0.6.1] - 2026-05-18
 
 ### Fixed

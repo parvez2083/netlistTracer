@@ -962,10 +962,18 @@ class NetlistParser:
         Schema version (v3) is UNCHANGED by streaming change. Round-trip via
         json.load produces the same dict structure as the prior monolithic dump.
 
+        Output ordering is now canonical and deterministic: subckts are sorted by name,
+        instances by (parent_cell, name), and dict keys are alphabetically sorted
+        (via sort_keys=True). This ensures two parses of the same source produce
+        byte-identical cache files even when parallel Verilog parsing perturbs
+        in-memory insertion order. Instance/subckt list *contents* (pins, nets,
+        merged-R sequences) retain their positional order; only the *iteration* order
+        over collections is canonicalized.
+
         Streaming writes:
           - Metadata fields (schema_version, format, source)
-          - Subckts object: iterates self.subckts, writes each as name -> pins dict
-          - Instances array: iterates self.instances_by_parent, writes each instance
+          - Subckts object: iterates self.subckts in sorted-by-name order, writes each as name -> pins dict
+          - Instances array: iterates all instances in sorted (parent_cell, name) order
           - Global nets and aliases at end
 
         Args:
@@ -998,12 +1006,12 @@ class NetlistParser:
             fh.write(json.dumps(self.source_path, separators=(",", ":")))
             fh.write(",")
 
-            # Subckts: write as dict of name -> pins
+            # Subckts: write as dict of name -> pins (sorted by name for determinism)
             fh.write(json.dumps("subckts", separators=(",", ":")))
             fh.write(":{")
 
             first = True
-            for name, subckt in self.subckts.items():
+            for name, subckt in sorted(self.subckts.items()):
                 if not first:
                     fh.write(",")
                 first = False
@@ -1014,40 +1022,43 @@ class NetlistParser:
             fh.write("}")
             fh.write(",")
 
-            # Instances: write as array
+            # Instances: write as array (deterministically sorted by (parent_cell, name))
             fh.write(json.dumps("instances", separators=(",", ":")))
             fh.write(":[")
 
+            # Flatten all instances and sort by (parent_cell, name) for canonical order
+            all_insts = [inst for insts in self.instances_by_parent.values() for inst in insts]
+            all_insts.sort(key=lambda i: (i.parent_cell, i.name))
+
             first = True
-            for insts in self.instances_by_parent.values():
-                for inst in insts:
-                    if not first:
-                        fh.write(",")
-                    first = False
+            for inst in all_insts:
+                if not first:
+                    fh.write(",")
+                first = False
 
-                    inst_dict: dict[str, object] = {
-                        "name": inst.name,
-                        "cell_type": inst.cell_type,
-                        "nets": inst.nets,
-                        "parent_cell": inst.parent_cell,
-                    }
-                    if inst.params:
-                        inst_dict["params"] = dict(inst.params)
+                inst_dict: dict[str, object] = {
+                    "name": inst.name,
+                    "cell_type": inst.cell_type,
+                    "nets": inst.nets,
+                    "parent_cell": inst.parent_cell,
+                }
+                if inst.params:
+                    inst_dict["params"] = dict(inst.params)
 
-                    fh.write(json.dumps(inst_dict, separators=(",", ":")))
+                fh.write(json.dumps(inst_dict, separators=(",", ":"), sort_keys=True))
 
             fh.write("]")
             fh.write(",")
 
-            # Aliases: write if any
+            # Aliases: write if any (sorted dict keys for determinism)
             aliases_out = {
                 name: dict(sub.aliases) for name, sub in self.subckts.items() if sub.aliases
             }
             fh.write(json.dumps("aliases", separators=(",", ":")))
             fh.write(":")
-            fh.write(json.dumps(aliases_out, separators=(",", ":")))
+            fh.write(json.dumps(aliases_out, separators=(",", ":"), sort_keys=True))
 
-            # Subckt params: write if any
+            # Subckt params: write if any (sorted dict keys for determinism)
             sbckt_prms = {
                 name: dict(sub.params) for name, sub in self.subckts.items() if sub.params
             }
@@ -1055,7 +1066,7 @@ class NetlistParser:
                 fh.write(",")
                 fh.write(json.dumps("subckt_params", separators=(",", ":")))
                 fh.write(":")
-                fh.write(json.dumps(sbckt_prms, separators=(",", ":")))
+                fh.write(json.dumps(sbckt_prms, separators=(",", ":"), sort_keys=True))
 
             fh.write("}")
 
